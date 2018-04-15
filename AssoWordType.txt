@@ -1,0 +1,24 @@
+package com.sekorm.core.common;
+
+/**
+ * 
+ * 联想词类型
+ *
+ * @author cheney_zhang
+ * @date 2017年3月23日
+ */
+public enum AssoWordType {
+	
+	// 类型 1：厂牌 2：商品分类 3：市场应用 4：PN/PL/S 5：资讯/资料关键词
+	BRAND(1), GOODS(2), ELEC(3), PN(4), ECDATAKEYWORD(5);
+	
+	private Integer code;
+	
+	private AssoWordType(Integer code) {
+		this.code = code;
+	}
+	
+	public Integer getCode() {
+		return code;
+	}
+}
