@@ -1,0 +1,70 @@
+package com.sekorm.core.service.analyzer;
+
+import java.util.List;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class Dictionary {
+	
+	private final static Logger logger = LoggerFactory.getLogger(Dictionary.class);
+	
+	private static   Dictionary singleton;
+	
+	private   DicSegment _MainSegment ;
+	
+	private Dictionary() {
+		_MainSegment=new DicSegment((char)0);
+	}
+	
+	
+	public static Dictionary initial() {
+		if(singleton==null) {
+			synchronized (Dictionary.class) {
+				if(singleton==null) {
+					singleton=new Dictionary();
+					return singleton;
+				}
+			}
+		}
+		return singleton;
+	}
+	
+	
+	public static Dictionary getSingleton() {
+		if(singleton==null) {
+			singleton=Dictionary.initial();
+		}
+		return singleton; 
+	}
+	
+	
+	public   synchronized void fillDictionary(Set<String> words, int type) {
+		for (String lineWords : words) {
+			singleton._MainSegment.fillSegment(lineWords, type);
+		}
+		
+	}
+	
+	public   synchronized void fillDictionary(List<String> words, int type) {
+		for (String lineWords : words) {
+			singleton._MainSegment.fillSegment(lineWords, type);
+		}
+	}
+	
+	public    DicSegment getMainDic() {
+		if(getSingleton()._MainSegment!=null) {
+			return getSingleton()._MainSegment;
+		}else {
+			logger.info("getSingleton()._MainSegment ==null");
+			_MainSegment=new DicSegment((char)0);
+			return _MainSegment;
+		}
+		 
+	}
+	
+	public static void clear() {
+		singleton=null;
+	}
+	
+}

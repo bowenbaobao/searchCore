@@ -1,0 +1,134 @@
+package com.sekorm.core.service.analyzer;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * 业务分词
+ * @author bowen_bao
+ *
+ */
+public class Tokenizer {
+	
+//	private final static Logger logger = LoggerFactory.getLogger(Tokenizer.class);
+	
+	/**
+	 * 分词主方法
+	 * @param words
+	 * @return
+	 */
+	public  static List<Matchs> doRecongrizer(String words) {
+		List<Matchs> matchsList   = new ArrayList<Matchs>();
+		DicSegment _MainDic = Dictionary.getSingleton().getMainDic();
+		char[] processChars = words.toCharArray();
+		int cursor = 0;
+		while (cursor < processChars.length) {
+			Matchs matchs = deepMatch(processChars, cursor, cursor + 1, _MainDic, null);
+			if (matchs.isMatch()) {
+				matchsList.add(matchs);
+				//游标移到已匹配词后一位
+				cursor = matchs.getEnd();
+			} else {
+				//未成词 往后移一位
+				cursor ++;
+			}
+		}
+		
+		return matchsList;
+	}
+	/**
+	 * 词元树深度搜索
+	 * @param matchChars	待匹配字符串
+	 * @param begin			开始游标
+	 * @param end			结束游标
+	 * @param segment		词元节点
+	 * @param match			匹配对象
+	 * @return
+	 */
+	private static Matchs deepMatch(char[] matchChars, int begin, int end, DicSegment segment, Matchs match) {
+		if (match == null) {
+			match = new Matchs();
+			match.setBegin(begin);
+			match.setEnd(end);
+		}
+		char nodeChar = matchChars[end - 1];
+		DicSegment childSegment = segment.matchChildNode(nodeChar);
+		if(childSegment != null) {
+			/*
+			 *  分支结构不识别包含词 如 中华人民（中华人民 ）不要 中华 和 人民
+			 */
+			 if (childSegment.getNodeState() == 1) {
+				match.setMatched();
+				match.setUnitType(childSegment.getNodeType());
+				match.createFinalString(matchChars);
+				// 是尾词 ,处理当前字符为最后一个并且当前字符在词典中伟前缀词情况
+			} else if(end == matchChars.length) {
+					//
+			} else if(childSegment.hasChildNode()) {
+				//结束游标往后移
+				match.setBegin(begin);
+				match.setEnd(end + 1);
+				//递归往下搜索
+				match = deepMatch(matchChars, begin, end + 1, childSegment, match);
+			}
+		} else {
+			match.setUnMatched();
+		}
+		
+		return match;
+	}
+	
+	public static void main(String[] args) {
+		Dictionary.clear();
+		List<String> list = new ArrayList<String>();
+		 list.add("central");
+		Dictionary.getSingleton().fillDictionary(list, 1);
+		
+		List<String> list1 = new ArrayList<String>();
+		list1.add("包伟");
+		Dictionary.getSingleton().fillDictionary(list1, 2);
+		
+		List<Matchs> matchs = Tokenizer.doRecongrizer("包伟");
+		System.out.println("matchs.size()="+matchs.size());
+		for (Matchs matchs2 : matchs) {
+			System.out.println(matchs2.getFinalString()+"|"+matchs2.getUnitType());
+		}
+		
+		System.out.println("****************************111");
+//		Dictionary.clear();
+//		
+//		List<String> list11 = new ArrayList<String>();
+//		list11.add("民名");
+//		Dictionary.getSingleton().fillDictionary(list11, 2);
+//		
+//		List<Matchs> matchs1 = Tokenizer.doRecongrizer("中华的人民名族");
+//		if(matchs1==null) {
+//			System.out.println("matchs1==null");
+//		}else {
+//			for (Matchs matchs3 : matchs1) {
+//				System.out.println(matchs3.getFinalString()+"|"+matchs3.getUnitType());
+//			}
+//		}
+//		
+//		System.out.println("****************************");
+//		Dictionary.clear();
+//		
+//		
+//		List<Matchs> matchs0 = Tokenizer.doRecongrizer("中华的人民名族");
+//		if(matchs0==null) {
+//			System.out.println("null");
+//		}else {
+//			
+//			System.out.println(matchs0.size());
+//			for (Matchs matchs2 : matchs0) {
+//				System.out.println(matchs2.getFinalString()+"|"+matchs2.getUnitType());
+//			}
+//		}
+		
+		
+		
+	}
+}

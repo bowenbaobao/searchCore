@@ -1,0 +1,193 @@
+package com.sekorm.core.service.analyzer;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 词典树核心类
+ * @author charles_shang
+ *
+ */
+public class DicSegment {
+	//数组最大长度
+	private static final  int MAX_ARRAY_LENGTH = 3;
+	//短子节点存储用array
+//	private static List<DicSegment> childrenArray = new ArrayList<DicSegment>(MAX_ARRAY_LENGTH);
+	private   List<DicSegment> childrenArray ;
+	//多子节点存储用map
+//	private static Map<Character, DicSegment> childrenMaps = new HashMap<Character, DicSegment>(16, 0.9f);
+	private   Map<Character, DicSegment> childrenMaps;
+	//当前节点的字符类型
+	private   Character nodeChar;
+	//当前节点是否是词元尾字，0是词元前置，1位词元结尾
+	private int nodeState = 0;
+	//默认-1 
+	private int nodeType = -1;
+
+	//子节点数
+	private int storeSize = 0;
+	
+	private List<DicSegment> getChildrenArray(){
+		if(this.childrenArray==null) {
+			synchronized (this) {
+				if(this.childrenArray==null) {
+					this.childrenArray=new ArrayList<DicSegment>(MAX_ARRAY_LENGTH); 
+				}
+			}
+		}
+		return childrenArray;
+	}
+	
+	private Map<Character, DicSegment> getChildrenMaps(){
+		if(this.childrenMaps==null) {
+			synchronized (this) {
+				if(this.childrenMaps==null) {
+					this.childrenMaps=new HashMap<Character, DicSegment>(16, 0.9f);
+				}
+			}
+		}
+		return this.childrenMaps;
+	}
+	
+	
+	public DicSegment(Character nodeChar) {
+		this.nodeChar = nodeChar;
+	}
+
+	/**
+	 * 添加词元构建词元树
+	 * @param words		词元
+	 * @param nodeType	词元类型
+	 */
+	public void fillSegment(String words, int nodeType) {
+		this.fillSegment(words.toCharArray(), 0, words.length(), nodeType);
+	}
+	
+	
+	/**
+	 * 添加词元构建词元树
+	 * @param charArray	词元字符数组
+	 * @param begin		游标
+	 * @param length	剩余处理长度
+	 * @param nodeType  词元类型
+	 */
+	public void fillSegment(char[] charArray, int begin, int length, int nodeType) {
+		if (length <= 0) {
+			return;
+		}
+		Character keyChar = charArray[begin];
+		DicSegment thisDic = this;
+		DicSegment dics = thisDic.lookforSegment(keyChar);
+		
+		if (length == 1) {
+			//词尾设置词属性
+			dics.setNodeType(nodeType);
+			dics.setNodeState(1);
+		}
+		
+		dics.fillSegment(charArray, begin + 1, length - 1, nodeType);
+	}
+	
+	/**
+	 * 查找子节点
+	 * @param nodeChar
+	 * @return
+	 */
+	public DicSegment matchChildNode(char nodeChar) {
+		DicSegment seg = null;
+		if(storeSize <= MAX_ARRAY_LENGTH && storeSize > 0) {
+			for(DicSegment segment : getChildrenArray()) {
+				if (segment.getNodeChar().equals(nodeChar)) {
+					seg = segment;
+					break;
+				}
+			}
+		} else if(storeSize > MAX_ARRAY_LENGTH) {
+			seg = this.childrenMaps.get(nodeChar);
+		}
+		
+		return seg;
+	}
+	
+	/**
+	 * 寻找子节点，不存在则创建添加进词元树
+	 * @param nodeChar	单字符
+	 * @return
+	 */
+	private DicSegment lookforSegment(Character nodeChar) {  
+		DicSegment seg = null;
+		if(storeSize <= MAX_ARRAY_LENGTH && storeSize > 0) {
+			for(DicSegment segment : getChildrenArray()) {
+				if (segment.getNodeChar().equals(nodeChar)) {
+					seg = segment;
+					break;
+				} 
+			}
+		} else if(storeSize > MAX_ARRAY_LENGTH) {
+			seg = this.childrenMaps.get(nodeChar);
+		}
+		
+		if (seg == null) {
+			seg = new DicSegment(nodeChar);
+			setChildNode(seg);
+		}
+		
+		return seg;
+	}
+	
+	/**
+	 * 添加子节点
+	 * @param dicSeg
+	 */
+	private void setChildNode(DicSegment dicSeg) {
+		if (MAX_ARRAY_LENGTH == storeSize) {
+//			mergeArrayToMap(childrenArray, childrenMaps);
+			mergeArrayToMap(getChildrenArray(), getChildrenMaps());
+			childrenMaps.put(dicSeg.getNodeChar(), dicSeg);
+		} else if(storeSize < MAX_ARRAY_LENGTH) {
+			getChildrenArray().add(dicSeg);
+		} else if(storeSize > MAX_ARRAY_LENGTH) {
+			getChildrenMaps().put(dicSeg.getNodeChar(), dicSeg);
+		}
+		storeSize++;
+	}
+	
+	public Boolean hasChildNode() {
+		return (storeSize > 0);
+	}
+	
+	public void setNodeState(int state) {
+		this.nodeState = state;
+	}
+	
+	public int getNodeState() {
+		return this.nodeState;
+	}
+	
+	public Character getNodeChar() {
+		return this.nodeChar;
+	}
+	
+	public void setNodeType(int nodeType) {
+		this.nodeType = nodeType;
+	}
+	
+	public int getNodeType() {
+		return nodeType;
+	}
+	
+	/**
+	 * 数组转Maps存储
+	 * @param array
+	 * @param maps
+	 */
+	private void mergeArrayToMap(List<DicSegment> array, Map<Character, DicSegment> maps) {
+		for (DicSegment dicSegment : array) {
+			maps.put(dicSegment.getNodeChar(), dicSegment);
+		}
+		array.clear();
+	}
+	
+}

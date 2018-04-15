@@ -1,0 +1,31 @@
+package com.sekorm.core.service.analyzer;
+
+/**
+ * 识别单元
+ * @author charles_shang
+ */
+public class IntentionUnit {
+	private Integer unitType;
+	private String words;
+	
+	public IntentionUnit(String words, Integer unitType) {
+		this.words = words;
+		this.unitType = unitType;
+	}
+
+	public Integer getUnitType() {
+		return unitType;
+	}
+
+	public void setUnitType(Integer unitType) {
+		this.unitType = unitType;
+	}
+
+	public String getWords() {
+		return words;
+	}
+
+	public void setWords(String words) {
+		this.words = words;
+	}
+}

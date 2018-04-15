@@ -1,0 +1,64 @@
+package com.sekorm.core.service.analyzer;
+
+public class Matchs {
+	// 当前词段不匹配
+	private static final int UNMATCH = 0;
+	// 当前已匹配
+	private static final int MATCH = 1;
+	private int begin;
+	private int end;
+	// 当前状态，默认未匹配
+	private int state = UNMATCH;
+	//词元类型
+	private int unitType;
+	
+	private String finalString;//分词之后的小词元
+
+	public void setFinalString(String finalString) {
+		this.finalString = finalString;
+	}
+
+	public Boolean isMatch() {
+		return (state == MATCH);
+	}
+	
+	public void setMatched() {
+		this.state = MATCH;
+	}
+	
+	public void setUnMatched() {
+		this.state = UNMATCH;
+	}
+	
+	public int getBegin() {
+		return begin;
+	}
+
+	public void setBegin(int begin) {
+		this.begin = begin;
+	}
+
+	public int getEnd() {
+		return end;
+	}
+
+	public void setEnd(int end) {
+		this.end = end;
+	}
+
+	public int getUnitType() {
+		return unitType;
+	}
+
+	public void setUnitType(int unitType) {
+		this.unitType = unitType;
+	}
+
+	public String getFinalString() {
+		return finalString;
+	}
+
+	public void createFinalString(char[] matchStr) {
+		this.finalString = new String(matchStr, begin, end - begin);
+	}
+}
