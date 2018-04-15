@@ -1,0 +1,748 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.collections.CollectionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import redis.clients.jedis.Jedis;
+
+import com.sekorm.cache.ecm.service.BrandCacheService;
+import com.sekorm.cache.ecm.util.BaseDataKeys;
+import com.sekorm.cache.ecm.util.DataType;
+import com.sekorm.cache.ecm.util.RedisThreadPool;
+import com.sekorm.common.util.JacksonUtils;
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.dao.IndustryWordMapper;
+import com.sekorm.core.dao.SemWordMapper;
+import com.sekorm.core.util.CommonUtil;
+import com.sekorm.core.vo.IndexRule;
+import com.sekorm.core.vo.SceneRuleVO;
+import com.sekorm.core.vo.SearchRule;
+
+/**
+ * 
+ * @describe 业务数据缓存服务类
+ *
+ * @author bowen_bao
+ * @date 2017年1月18日
+ */
+@Service
+public class EcCacheService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Autowired
+	private EcDataService ecDataService;
+	
+	@Autowired
+	private RuleService ruleService;
+	
+	@Autowired
+	private SekAnalyzerService sekAnalyzerService;
+	
+	@Autowired
+	private AnalyzerService analyzerService;
+	
+	@Autowired
+	private IndustryWordMapper industryWordMapper;
+	
+	@Autowired
+	private SemWordMapper semWordMapper;
+	
+	@Autowired
+	private BrandCacheService brandCacheService;
+	
+	@Autowired
+	private CommonUtil commonUtil;
+	
+	
+	@Value("${data.env}")
+    private String env;
+	
+	private DataType dataType;
+	
+	private List<SearchRule> searchRule;//缓存所有查询时配置规则
+	
+	private IndexRule indexRule; //每次建索引都需要重新获取建索引的分词配置(每晚刷新)
+	
+	
+	
+
+	/**
+	 * @describe 获取行业词库，缓存没有则数据读取 (2018-3-15修改为缓存中获取)
+	 * @author hawii_lai
+	 * @date 2017年3月15日
+	 * @return Set<String>
+	 */
+	public Set<String> getIKWordsList(){
+		Set<String> set = new HashSet<String>();
+		try {
+			Jedis jedis = RedisThreadPool.getJedis(getDataType());
+			set.addAll(jedis.smembers(SearchCoreConstant.BRAND_NAME_SET));
+			set.addAll(jedis.smembers(SearchCoreConstant.OPERATE_NAME_SET));
+			set.addAll(jedis.smembers(SearchCoreConstant.PN_NAME_SET));
+			
+		} catch (Exception e) {
+			logger.error(e.getMessage(),e);
+		}
+		return set;
+	}
+
+	
+	/**
+	 * 
+	 * @describe  缓存所有查询配置规则(除去创建索引的配置规则)
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月7日
+	 * @param
+	 * @return
+	 */
+	public List<SearchRule> getSearchRule(){
+		if(CollectionUtils.isNotEmpty(searchRule)){
+			return searchRule;
+		}else{
+			searchRule=ruleService.getSearchRule();
+			return searchRule;
+		}
+	}
+	
+	/**
+	 * 
+	 * @describe 获取创建索引规则
+	 *
+	 * @author bowen_bao
+	 * @date 2017年3月2日
+	 * @param
+	 * @return
+	 */
+	public IndexRule getIndexRule(){
+		if(indexRule!=null){
+			return indexRule;
+		}else{
+			Jedis jedis = RedisThreadPool.getJedis(getDataType());
+			try {
+				String ruleStr = jedis.get(SearchCoreConstant.INDEX_SPLIT_RULE);
+				if(ruleStr != null){
+					Map<String, Integer> map = new HashMap<String, Integer>();
+					String arr[] = ruleStr.split(",");
+					String tempArr[] = null;
+					for(String str:arr){
+						tempArr = str.split("=");
+						map.put(tempArr[0], Integer.parseInt(tempArr[1]));
+					}
+					indexRule = new IndexRule();
+					indexRule.setAttributeSplit(map);
+				}else{ //无缓存
+					indexRule=ruleService.getWriterAnalyzerRule(env);
+				}
+			}finally{
+				jedis.close();
+			}
+			return indexRule;
+		}
+	}
+	
+	/**
+	 * @describe  TODO  根据场景code 获取 该场景的规则
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	public SearchRule getSearchRuleBySceneCode(Integer code){
+		Jedis jedis = RedisThreadPool.getJedis(getDataType());
+		SearchRule searchRule;
+		try {
+			String ruleJson = jedis.get(SearchCoreConstant.SCENE_RULE_PREFIX+code);
+			List<SceneRuleVO> list = null;
+			searchRule = null;
+			if(ruleJson != null){
+				list = JacksonUtils.toBean(ruleJson, ArrayList.class, SceneRuleVO.class);
+			}
+			if(list != null){
+				searchRule = new SearchRule();
+				searchRule.setSceneCode(code);
+				Map<String, Integer> splitRule = new HashMap<String, Integer>();
+				Map<String, Float> weigthRule = new HashMap<String, Float>();
+				Map<String, Map<String,Float>> attrWeightRule = new HashMap<String, Map<String,Float>>();
+				Map<String, Map<String,Integer>> filterRule = new HashMap<String, Map<String,Integer>>();
+				String key = "";
+				Integer value = null;
+				Float boost = null;
+				String tempStr = null;
+				String attrArr[] = null;
+				String tempArr[] = null;
+				Map<String,Float> floatMap = null;
+				Map<String,Integer> integerMap = null;
+				for(SceneRuleVO vo:list){
+					key = vo.getAttribute();
+					value = vo.getAnalyzerCode();
+					if(value != null && value != 0){
+						splitRule.put(key, value);
+					}
+					boost = vo.getBoost();
+					if(boost != null && boost != 0){
+						weigthRule.put(key, boost);
+					}
+					//设置字段内权重
+					tempStr = vo.getAttrWeight();
+					if(tempStr != null){
+						floatMap = new HashMap<String,Float>();
+						attrArr = tempStr.split(",");
+						for(String attr:attrArr){
+							tempArr = attr.split(":");
+							floatMap.put(tempArr[0], Float.parseFloat(tempArr[1]));
+						}
+						attrWeightRule.put(key, floatMap);
+					}
+					//设置字段过滤规则
+					tempStr = vo.getAttrFilter();
+					if(tempStr != null){
+						integerMap = new HashMap<String,Integer>();
+						attrArr = tempStr.split(",");
+						for(String attr:attrArr){
+							tempArr = attr.split(":");
+							integerMap.put(tempArr[0], Integer.parseInt(tempArr[1]));
+						}
+						filterRule.put(key, integerMap);
+					}
+				}
+				searchRule.setAttributeSplit(splitRule);
+				searchRule.setAttributeWeight(weigthRule);
+				if(attrWeightRule.size() > 0){
+					searchRule.setAttrValWeight(attrWeightRule);
+				}
+				if(filterRule.size() > 0){
+					searchRule.setAttrValFilter(filterRule);
+				}
+				searchRule.setSceneCode(code);
+			}
+		} finally{
+			jedis.close();
+		}
+		if(searchRule == null){
+			logger.info("****************searchRule is null***************");
+		}
+		return searchRule;
+	}
+	
+	/**
+	 * @describe 将建索引的规则写入缓存
+	 * @author hawii_lai
+	 * @date 2017年2月16日
+	 */
+	public void writeIndexSplitCache(String env){
+			logger.info("开始刷新索引规则("+env+")....");
+			IndexRule indexRule = ruleService.getCurrentIndexRule(env);
+			if(indexRule != null){
+				this.indexRule = indexRule;
+				Jedis jedis = null;
+				jedis = RedisThreadPool.getJedis(getDataType());
+				try {
+					String value = "";
+					for(Map.Entry<String, Integer> entry:indexRule.getAttributeSplit().entrySet()){
+						value += "," + entry.getKey() + "=" +entry.getValue();
+					}
+					if(value.length()>0)
+					jedis.set(SearchCoreConstant.INDEX_SPLIT_RULE, value.substring(1));
+				}finally{
+					jedis.close();
+				}
+			}
+			logger.info("刷新索引规则完成("+env+")");
+	}
+	
+	
+	/**
+	 * @describe 将场景规则写入缓存
+	 * @author hawii_lai
+	 * @date 2017年2月16日
+	 */
+	public void writeSceneRuleCache(String env){
+			logger.info("开始将场景规则写入缓存");
+			List<SceneRuleVO> list = ruleService.getAllSceneRule(env);
+			Map<String, List<SceneRuleVO>> map = new HashMap<String, List<SceneRuleVO>>();
+			List<SceneRuleVO> ruleList = null;
+			for(SceneRuleVO vo:list){
+				ruleList = map.get(vo.getSceneCode()+"");
+				if(ruleList == null){
+					ruleList = new ArrayList<SceneRuleVO>();
+				}
+				ruleList.add(vo);
+				map.put(vo.getSceneCode()+"", ruleList);
+			}
+			if(map.size() > 0){
+				Jedis jedis = null;
+				jedis = RedisThreadPool.getJedis(getDataType());
+				Set<String> keys = jedis.keys("SCENE_RULE_*");
+				Iterator<String> it = keys.iterator();  
+		        while(it.hasNext()){  
+		            String keyStr = it.next();  
+		            jedis.del(keyStr);  
+		        } 
+				try {
+					for(Map.Entry<String, List<SceneRuleVO>> entry:map.entrySet()){
+						jedis.set("SCENE_RULE_"+entry.getKey(), JacksonUtils.toJson(entry.getValue()));
+					}
+				}finally{
+					jedis.close();
+				}
+			}
+			logger.info("场景规则写入缓存完成("+env+")");
+	}
+	/**
+	 * @describe 将厂牌别名和名称的关系写入缓存
+	 * @author hawii_lai
+	 * @date 2017年6月28日
+	 */
+	public void writeBrandCache(){
+		String jsonStr = brandCacheService.getBrandTree();
+		List<Map<String,Object>> list = JacksonUtils.toBean(jsonStr, List.class);
+		List<Map<String,Object>> children = null;
+		String alias = null;
+		String name = null;
+		String[] tempArr = null;
+		Jedis jedis = RedisThreadPool.getJedis(getDataType());
+		try {
+			if(list.size()>0){
+				Set<String> set = jedis.keys(SearchCoreConstant.BRAND_ALIAS_NAME_CACHE+"_*");
+				for(String str : set){
+					jedis.del(str);
+				}
+			}
+			for(Map map : list){
+				children = (List<Map<String,Object>>)map.get("children");
+				for(Map m : children){//产品线
+					name = m.get("name").toString();
+					alias = m.get("alias") == null?null : m.get("alias").toString();
+					if(alias != null){
+						tempArr = alias.split(",");
+						for(String str : tempArr){
+							jedis.set(SearchCoreConstant.BRAND_ALIAS_NAME_CACHE + "_" + str.toLowerCase(), name);
+						}
+					}
+				}
+				//厂牌
+				name = map.get("name").toString();
+				alias = map.get("alias") == null?null : map.get("alias").toString();
+				if(alias != null){
+					tempArr = alias.split(",");
+					for(String str : tempArr){
+						jedis.set(SearchCoreConstant.BRAND_ALIAS_NAME_CACHE + "_" + str.toLowerCase(), name);
+					}
+				}
+			}
+		} finally {
+			jedis.close();
+		}
+	}
+	/**
+	 * @describe 通过厂牌别名获取厂牌名称
+	 * @author hawii_lai
+	 * @date 2017年6月28日
+	 * @param alia
+	 * @return brandName
+	 */
+	public String getBrandNameByAlia(String alia){
+		Jedis jedis = RedisThreadPool.getJedis(getDataType());
+		try {
+			String name = jedis.get(SearchCoreConstant.BRAND_ALIAS_NAME_CACHE+"_"+alia);
+			return name;
+		} finally {
+			jedis.close();
+		}
+	}
+	
+	
+	/**
+	 * @describe 刷新所有缓存
+	 * @author hawii_lai
+	 * @date 2017年2月16日
+	 */
+	public void flushAll() {
+		logger.info("刷新"+env+"环境缓存...");
+		//将建索引的规则写入缓存
+		writeIndexSplitCache(env);
+		//将场景规则写入缓存
+		writeSceneRuleCache(env);
+		logger.info("刷新"+env+"环境缓存完成");
+	}
+	
+	/**
+	 * @describe 缓存中获取顶级厂牌
+	 * @author hawii_lai
+	 * @date 2017年3月2日
+	 * @return List<String>
+	 */
+	public List<String> getBrandListFromCache(){
+		return ecDataService.getAllTopBrand();
+
+	}
+	
+	/**
+	 * @describe 缓存中获取产品线
+	 * @author hawii_lai
+	 * @date 2017年3月2日
+	 * @return List<String>
+	 */
+	public List<String> getProductLineListFromCache(){
+		return ecDataService.getAllProductLine();
+	}
+	
+	/**
+	 * 
+	 * @describe 缓存中获取商品分类
+	 * @author hawii_lai
+	 * @date 2017年3月2日
+	 * @return List<String>
+	 */
+	public List<String> getGoodsListFromCache(){
+		return ecDataService.getAllGoods();
+	
+	}
+	
+	/**
+	 * @describe 缓存中获取名称和别名
+	 * @author hawii_lai
+	 * @date 2017年3月2日
+	 * @return List<String>
+	 */
+	public List<String> getElecListFromCache(){
+		return ecDataService.getAllElec();
+		 
+	}
+	
+	/**
+	 * @describe 缓存中获取s pl pn
+	 * @author hawii_lai
+	 * @date 2017年3月2日
+	 * @return List<String>
+	 */
+	public List<String> getSplpnListFromCache(){
+		return ecDataService.getAllPnPlS();
+	}
+	
+	
+	
+	public DataType getDataType() {
+		if(dataType == null){
+			if("beta".equals(env)){
+				dataType = DataType.BETA_SEARCH;
+			}else{
+				dataType = DataType.SEARCH;
+			}
+		}
+		return dataType;
+	}
+	
+	public DataType getRecomDataType() {
+		DataType dataType = null;
+		if(dataType == null){
+			if("beta".equals(env)){
+				dataType = DataType.BETA_RECOMM;
+			}else{
+				dataType = DataType.RECOMM;
+			}
+		}
+		return dataType;
+	}
+	
+	
+	public Set<String> getSysBrandSet(){
+		Jedis jedis = null;
+		Set<String> set = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			set = jedis.smembers(SearchCoreConstant.BRAND_NAME_SET);
+		}finally{
+			jedis.close();
+		}
+		return set;
+	}
+	public Set<String> getSemPNSet() {
+		Jedis jedis = null;
+		Set<String> set = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			set = jedis.smembers(SearchCoreConstant.SEM_PN_SET);
+		}finally{
+			jedis.close();
+		}
+		return set;
+	}
+	public Set<String> getSemELECSet() {
+		Jedis jedis = null;
+		Set<String> set = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			set = jedis.smembers(SearchCoreConstant.SEM_ELEC_SET);
+		}finally{
+			jedis.close();
+		}
+		return set;
+	}
+	public Set<String> getSemGoodSet() {
+		Jedis jedis = null;
+		Set<String> set = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			set = jedis.smembers(SearchCoreConstant.SEM_GOOD_SET);
+		}finally{
+			jedis.close();
+		}
+		return set;
+	}
+	public Set<String> getSemBrandSet() {
+		Jedis jedis = null;
+		Set<String> set = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			set = jedis.smembers(SearchCoreConstant.SEM_BRAND_SET);
+		}finally{
+			jedis.close();
+		}
+		return set;
+	}
+	
+	/**
+	 * @Description 刷新IK词典
+	 * @author hawii_lai
+	 * @date 2018年3月16日 上午10:16:37 
+	 */
+	public void flushIKWord(){
+		logger.info("添加IK Word......");
+		Jedis jedis = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			
+			Set<String> temp = jedis.smembers(SearchCoreConstant.OPERATE_NAME_SET);
+			temp.addAll(jedis.smembers(SearchCoreConstant.BRAND_NAME_SET));
+			temp.addAll(jedis.smembers(SearchCoreConstant.PN_NAME_SET));
+			analyzerService.addIKWords(temp, null);
+			
+		}finally{
+			jedis.close();
+		}
+		logger.info("添加IK Word完成");
+	}
+	
+	/**
+	 * @Description 每小时更新一次sek词典
+	 * @author hawii_lai
+	 * @date 2018年3月16日 上午10:05:24 
+	 */
+	public void flushSekWord() {
+		logger.info("添加Sek Word......");
+		Jedis jedis = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			
+			sekAnalyzerService.cleanSekWord();
+			Set<String> temp = jedis.smembers(SearchCoreConstant.BRAND_NAME_SET);
+			Set<String> tempBrand=new HashSet<String>();
+			logger.info("厂牌数"+temp.size());
+			for(String s:temp) {
+				if(s.length()==2  &&  !commonUtil.isContainChinese(s)) {
+					s+=" ";
+				}
+				tempBrand.add(s);
+			}
+			
+			sekAnalyzerService.addSekWord(tempBrand, 1);
+			
+			temp = jedis.smembers(SearchCoreConstant.GOOD_NAME_SET);
+			logger.info("商品分类数"+temp.size());
+			sekAnalyzerService.addSekWord(temp, 2);
+			
+			temp = jedis.smembers(SearchCoreConstant.ELEC_NAME_SET);
+			
+//			String pathname="d:\\123bw.txt";
+//			File writename=new File(pathname);
+//			try {
+//				writename.createNewFile();
+//				BufferedWriter out=new BufferedWriter(new FileWriter(writename));
+//				for(String s:temp) {
+//					out.write(s+",");
+//				}
+//			} catch (IOException e) {
+//				// TODO Auto-generated catch block
+//				e.printStackTrace();
+//			}
+			
+			logger.info("市场应用数"+temp.size());
+			sekAnalyzerService.addSekWord(temp, 3);
+			
+		}finally{
+			jedis.close();
+		}
+		logger.info("添加Sek Word完成");
+	}
+	
+	/**
+	 * @Description 每天更新行业词和SEM词到缓存中
+	 * @author hawii_lai
+	 * @date 2018年3月15日 下午8:45:15 
+	 */
+	public void refreshCacheWord() {
+		Jedis jedis = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getDataType());
+			List<String> temp = getBrandListFromCache();
+			if(temp.size() > 0){
+				jedis.del(SearchCoreConstant.BRAND_NAME_SET);
+				for(String str : temp){
+					jedis.sadd(SearchCoreConstant.BRAND_NAME_SET, str);
+				}
+			}
+			temp = industryWordMapper.getIndustryWordByType(-1);
+			if(temp.size() > 0){
+				jedis.del(SearchCoreConstant.OPERATE_NAME_SET);
+				for(String str : temp){
+					jedis.sadd(SearchCoreConstant.OPERATE_NAME_SET, str);
+				}
+			}
+			temp = getGoodsListFromCache();
+			if(temp.size() > 0){
+				jedis.del(SearchCoreConstant.GOOD_NAME_SET);
+				for(String str : temp){
+					jedis.sadd(SearchCoreConstant.GOOD_NAME_SET, str);
+				}
+			}
+			temp = getElecListFromCache();
+			if(temp.size() > 0){
+				jedis.del(SearchCoreConstant.ELEC_NAME_SET);
+				for(String str : temp){
+					jedis.sadd(SearchCoreConstant.ELEC_NAME_SET, str);
+				}
+			}
+			temp = getSplpnListFromCache();
+			if(temp.size() > 0){
+				jedis.del(SearchCoreConstant.PN_NAME_SET);
+				for(String str : temp){
+					jedis.sadd(SearchCoreConstant.PN_NAME_SET, str);
+				}
+			}
+			//sem word  1:竞品厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+			List<Map<String, Object>> mapList = null;
+			mapList = semWordMapper.getSemWord();
+			String dataType = null;
+			if(mapList.size() > 0){
+				jedis.del(SearchCoreConstant.SEM_BRAND_SET);
+				jedis.del(SearchCoreConstant.SEM_GOOD_SET);
+				jedis.del(SearchCoreConstant.SEM_ELEC_SET);
+				jedis.del(SearchCoreConstant.SEM_PN_SET);
+			}
+			for(Map<String, Object> map:mapList){
+				dataType = map.get("data_type").toString();
+				if("1".equals(dataType)){
+					jedis.sadd(SearchCoreConstant.SEM_BRAND_SET,map.get("sem_word").toString());
+				}else if("2".equals(dataType)){
+					jedis.sadd(SearchCoreConstant.SEM_GOOD_SET,map.get("sem_word").toString());
+				}else if("3".equals(dataType)){
+					jedis.sadd(SearchCoreConstant.SEM_ELEC_SET,map.get("sem_word").toString());
+				}else if("3".equals(dataType)){
+					jedis.sadd(SearchCoreConstant.SEM_PN_SET,map.get("sem_word").toString());
+				}
+			}
+			logger.info("词库缓存刷新完成");
+		}finally{
+			jedis.close();
+		}
+	}
+	
+	
+	/**
+	 * @Description 推荐缓存中获取内容数据的厂牌
+	 * @author hawii_lai
+	 * @date 2018年3月27日 上午11:54:57 
+	 * @param @param keyType
+	 * @param @param ecId
+	 * @param @return
+	 * @return String
+	 */
+	public String getBrandByEcId(String keyType, String ecId){
+		Jedis jedis = null;
+		String result = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getRecomDataType());
+			result = jedis.get(BaseDataKeys.getKey(keyType, ecId, BaseDataKeys.BRAND_KEY));
+		}finally{
+			jedis.close();
+		}
+		return result;
+	}
+	/**
+	 * @Description 推荐缓存中获取内容数据的商品分类
+	 * @author hawii_lai
+	 * @date 2018年3月27日 上午11:54:57 
+	 * @param @param keyType
+	 * @param @param ecId
+	 * @param @return
+	 * @return String
+	 */
+	public String getGoodByEcId(String keyType, String ecId){
+		Jedis jedis = null;
+		String result = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getRecomDataType());
+			result = jedis.get(BaseDataKeys.getKey(keyType, ecId, BaseDataKeys.GOODS_KEY));
+		}finally{
+			jedis.close();
+		}
+		return result;
+	}
+	/**
+	 * @Description 推荐缓存中获取内容数据的应用
+	 * @author hawii_lai
+	 * @date 2018年3月27日 上午11:54:57 
+	 * @param @param keyType
+	 * @param @param ecId
+	 * @param @return
+	 * @return String
+	 */
+	public String getELECByEcId(String keyType, String ecId){
+		Jedis jedis = null;
+		String result = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getRecomDataType());
+			result = jedis.get(BaseDataKeys.getKey(keyType, ecId, BaseDataKeys.ELEC_KEY));
+		}finally{
+			jedis.close();
+		}
+		return result;
+	}
+	/**
+	 * @Description 推荐缓存中获取内容数据的商品分类
+	 * @author hawii_lai
+	 * @date 2018年3月27日 上午11:54:57 
+	 * @param @param keyType
+	 * @param @param ecId
+	 * @param @return
+	 * @return String
+	 */
+	public String getPNByEcId(String keyType, String ecId){
+		Jedis jedis = null;
+		String result = null;
+		try {
+			jedis = RedisThreadPool.getJedis(getRecomDataType());
+			result = jedis.get(BaseDataKeys.getKey(keyType, ecId, BaseDataKeys.PN_KEY));
+		}finally{
+			jedis.close();
+		}
+		return result;
+	}
+	
+	
+}

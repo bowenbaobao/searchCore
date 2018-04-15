@@ -1,0 +1,450 @@
+package com.sekorm.core.service;
+
+import java.io.File;
+import java.io.IOException;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.IntField;
+import org.apache.lucene.document.LongField;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.IndexWriterConfig.OpenMode;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FSDirectory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.model.EcData;
+import com.sekorm.core.util.CommonUtil;
+import com.sekorm.core.util.HtmlUtil;
+import com.sekorm.core.util.QueryUtil;
+import com.sekorm.core.vo.IndexRule;
+
+/**
+ * 
+ * @describe index 管理服务类
+ *
+ * @author bowen_bao
+ * @date 2017年1月18日
+ */
+@Service
+public class IndexService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	private  IndexWriter indexWriter=null;
+	private  IndexSearcher  indexSearcher=null;
+	private  String indexPath=SearchCoreConstant.ECNEW_INDEX_PATH;
+	
+	@Autowired
+	private AnalyzerService analyzerService;
+	
+	
+	@Autowired
+	private HtmlUtil htmlUtil;
+	
+	@Autowired
+	private QueryUtil queryUtil;
+	
+	@Autowired
+	private CommonUtil commonUtil;
+	
+	
+	/**
+	 * 
+	 * @describe 获取indexWriter
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 * @param
+	 * @return
+	 */
+	public IndexWriter getIndexWriter(){
+		
+		if(indexWriter!=null){
+			return indexWriter;
+		}else{
+			IndexWriterConfig iwc=new IndexWriterConfig(SearchCoreConstant.SYS_LUCENE_VERSION,analyzerService.getPerFieldAnalyzerWrapper());
+			iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
+			//索引目录
+			Directory indexDir;
+			try {
+				indexDir = FSDirectory.open(new File(indexPath));
+				
+				indexWriter=new IndexWriter(indexDir, iwc);
+				return indexWriter;
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+			return null;			
+		}
+	}
+	
+	/**
+	 * 
+	 * @describe 获取indexSearcher
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 * @param
+	 * @return
+	 */
+	public IndexSearcher getIndexSearcher(){
+		
+		if(indexSearcher!=null){
+			return indexSearcher;
+		}else{
+			IndexReader indexReader;
+			try {
+				indexReader = DirectoryReader.open(getIndexWriter(),true);
+				indexSearcher=new IndexSearcher(indexReader);
+				
+				return indexSearcher ;
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			return null;
+		}
+	}
+	
+	
+	/**
+	 * 
+	 * @describe 刷新index   写提交，刷新读
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 * @param
+	 * @return
+	 */
+	public synchronized  void commitIndex(){
+		
+		try {
+			IndexReader oldReader=getIndexSearcher().getIndexReader();
+			getIndexWriter().commit();
+			IndexReader newReader=DirectoryReader.openIfChanged((DirectoryReader) oldReader,indexWriter,true);
+			if(null!=newReader && newReader!=oldReader){
+				indexSearcher=new IndexSearcher(newReader);
+				Thread.sleep(SearchCoreConstant.INDEXREADER_SLEEP_TIME);
+				oldReader.close();
+			}
+		} catch (Exception e) {
+			try {
+				indexWriter.rollback();
+			} catch (IOException e1) {
+				logger.error("commitIndex indexWriter rollback error:"+e);
+				e1.printStackTrace();
+			}
+			logger.error("IndexService refreshIndex error ",e);
+		}
+	}
+	
+	/**
+	 * 
+	 * @describe 重新加载indexRule 重新获取indexWrite  and  indexSearcher
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	public synchronized  void clearIndexWriter(){
+		try {
+			if(indexWriter!=null){
+				indexWriter.close();
+//				indexWriter.commit();
+				IndexWriterConfig iwc=new IndexWriterConfig(SearchCoreConstant.SYS_LUCENE_VERSION,analyzerService.getPerFieldAnalyzerWrapper());
+				iwc.setOpenMode(OpenMode.CREATE_OR_APPEND);
+				//索引目录
+				Directory indexDir;
+				 
+					indexDir = FSDirectory.open(new File(indexPath));
+					indexWriter=new IndexWriter(indexDir, iwc);
+				 
+				 	
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		indexSearcher=null;
+	}
+
+
+	
+	/**
+	 * 
+	 * @describe SearchRule 创建索引
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月3日
+	 * @param
+	 * @return
+	 */
+	public boolean createOrUpdate(EcData ecData,IndexRule rule){
+		
+		
+		
+		
+		if(ecData==null){
+			return false;
+		}
+		try {
+		
+		IndexWriter  indexWriter=getIndexWriter();
+		Document doc=new Document();
+
+		
+		//=========================不需要配置分词规则的属性===========================
+		if(StringUtils.isNotEmpty(ecData.getIndexType())){
+			doc.add(new Field("indexType",ecData.getIndexType(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}else{
+			return false;
+		}
+        	
+		if("1".equals(ecData.getIndexType())){
+			if(ecData.getEcNewid()!=null){
+				doc.add(new IntField("ecNewid",ecData.getEcNewid(),IntField.TYPE_STORED));
+			}
+		}else if("2".equals(ecData.getIndexType())){
+			if(ecData.getEcDocid()!=null){
+				doc.add(new IntField("ecDocid",ecData.getEcDocid(),IntField.TYPE_STORED));
+			}
+		}else if("3".equals(ecData.getIndexType())){
+			if(ecData.getQuestionid()!=null){
+				doc.add(new IntField("questionid",ecData.getQuestionid(),IntField.TYPE_STORED));
+			}
+		}
+		
+		if(ecData.getId()!=null){
+			doc.add(new IntField("id",ecData.getId(),IntField.TYPE_STORED));
+		}
+		
+		
+		if(ecData.getDocCode()!=null){
+			doc.add(new IntField("docCode",ecData.getDocCode(),IntField.TYPE_STORED));
+		}
+		
+		
+		
+		if(StringUtils.isNotEmpty(ecData.getDocExt())){
+			doc.add(new Field("docExt",ecData.getDocExt(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getImg1())){
+			doc.add(new Field("img1",ecData.getImg1(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg2())){
+			doc.add(new Field("img2",ecData.getImg2(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg3())){
+			doc.add(new Field("img3",ecData.getImg3(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg4())){
+			doc.add(new Field("img4",ecData.getImg4(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg5())){
+			doc.add(new Field("img5",ecData.getImg5(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg6())){
+			doc.add(new Field("img6",ecData.getImg6(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg7())){
+			doc.add(new Field("img7",ecData.getImg7(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		if(StringUtils.isNotEmpty(ecData.getImg8())){
+			doc.add(new Field("img8",ecData.getImg8(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		
+		if(StringUtils.isNotEmpty(ecData.getPublishTime())){
+			doc.add(new Field("publishTime",ecData.getPublishTime(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+			doc.add(new LongField("longpublishTime",commonUtil.DateStringToLong(ecData.getPublishTime()),LongField.TYPE_STORED));
+		}
+		
+		
+		
+		if(StringUtils.isNotEmpty(ecData.getSecretLevel())){
+			doc.add(new Field("secretLevel",ecData.getSecretLevel(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getTouristFlag())){
+			doc.add(new Field("touristFlag",ecData.getTouristFlag(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		if("1".equals(ecData.getIndexType()) || "3".equals(ecData.getIndexType())){
+			if(StringUtils.isNotEmpty(ecData.getWebShow())){
+				doc.add(new Field("webShow",ecData.getWebShow(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+			}
+			if(StringUtils.isNotEmpty(ecData.getAppShow())){
+				doc.add(new Field("appShow",ecData.getAppShow(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+			}
+		}else if("2".equals(ecData.getIndexType())  || "6".equals(ecData.getIndexType()) ){
+			doc.add(new Field("webShow","1",SearchCoreConstant.STORE_YES_ANALYZED_NO));
+			doc.add(new Field("appShow","1",SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		
+		if(StringUtils.isNotEmpty(ecData.getSubType())){
+			doc.add(new Field("subType",ecData.getSubType(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		
+		
+		if(StringUtils.isNotEmpty(ecData.getSearchKeyword())){
+			doc.add(new Field("searchKeyword",ecData.getSearchKeyword(),SearchCoreConstant.STORE_YES_ANALYZED_NO));
+		}
+		//========================需要配置分词规则的属性===============================
+		if(StringUtils.isNotEmpty(ecData.getTitle())){
+				Field field=new Field("title",ecData.getTitle(),
+						SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("title"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+				doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getSummary())){
+			Field field=new Field("summary",ecData.getSummary(),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("summary"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getDetail())){
+			String detailStr=htmlUtil.extractTextData(ecData.getDetail());
+			if(StringUtils.isNotEmpty(detailStr)){
+				Field field=new Field("detail",detailStr,
+						SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("detail"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+				doc.add(field);
+			}
+		}
+		
+		// 对特殊的情况做特殊处理
+		if(StringUtils.isNotEmpty(ecData.getKeyword())){
+			Field field=new Field("keyword",ecData.getKeyword().replace('/', '-'),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("keyword"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		// 对特殊的情况做特殊处理
+		if(StringUtils.isNotEmpty(ecData.getBrandName())){
+			if(ecData.getBrandName().contains(" ")){
+				ecData.setBrandName(ecData.getBrandName()+","+ecData.getBrandName().replace(' ', '-'));
+			}
+			Field field=new Field("brandName",ecData.getBrandName().replace('/', '-'),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("brandName"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getGoodsName())){
+			if(ecData.getGoodsName().contains(" ")){
+				ecData.setGoodsName(ecData.getGoodsName()+","+ecData.getGoodsName().replace(' ', '-'));
+			}
+			Field field=new Field("goodsName",ecData.getGoodsName().replace('/', '-'),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("goodsName"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getElecName())){
+			if(ecData.getElecName().contains(" ")){
+				ecData.setElecName(ecData.getElecName()+","+ecData.getElecName().replace(' ', '-'));
+			}
+			Field field=new Field("elecName",ecData.getElecName().replace('/', '-'),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("elecName"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getPnName())){
+			if(ecData.getPnName().contains(" ")){
+				ecData.setPnName(ecData.getPnName()+","+ecData.getPnName().replace(' ', '-'));
+			}
+			Field field=new Field("pnName",ecData.getPnName().replace('/', '-'),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("pnName"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getPnResembleCode())){
+			Field field=new Field("pnResembleCode",ecData.getPnResembleCode(),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("pnResembleCode"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		if(StringUtils.isNotEmpty(ecData.getPackageInfo())){
+			Field field=new Field("packageInfo",ecData.getPackageInfo(),
+					SearchCoreConstant.ANALYZER_NO_CODE.equals(rule.getAttributeSplit().get("packageInfo"))?SearchCoreConstant.STORE_YES_ANALYZED_NO:SearchCoreConstant.STORE_YES_ANALYZED);
+			doc.add(field);
+		}
+		
+		
+		
+		//节约性能，直接删除后添加索引
+		BooleanQuery query=new BooleanQuery();
+		Query queryid=queryUtil.getNumericRangeQuery("id", ecData.getId());
+		Query indextypeQ=queryUtil.getTermQuery("indexType",ecData.getIndexType());
+		query.add(queryid,Occur.MUST);
+		query.add(indextypeQ,Occur.MUST);
+		getIndexWriter().deleteDocuments(query);
+		
+		if(null!=ecData.getDocCode() && 0!=ecData.getDocCode()){
+			BooleanQuery queryBlCode=new BooleanQuery();
+			Query queryCode=queryUtil.getNumericRangeQuery("docCode", ecData.getDocCode());
+			Query indextypeCode=queryUtil.getTermQuery("indexType","2");
+			queryBlCode.add(queryCode,Occur.MUST);
+			queryBlCode.add(indextypeCode,Occur.MUST);
+			getIndexWriter().deleteDocuments(queryBlCode);
+		}
+		
+		
+			
+			indexWriter.addDocument(doc);
+			
+//			TODO： 这里并不去刷新IndexSearch
+//			searchUtil.refreshSearch();
+			
+		} catch (Exception e) {
+			logger.error("IndexService createOrUpdate index error",e,e.getStackTrace());
+		}
+		
+		return true;
+	}
+	
+	
+	
+	/**
+	 * 删除所有索引
+	 */
+	public boolean deleteAll(){
+		try {
+			getIndexWriter().deleteAll();
+			return true;
+		} catch (IOException e) {
+			logger.error("IndexService deleteAll error:" + e.getStackTrace());
+		}
+		return false;
+	}
+	
+	
+	public boolean deleteSingle(EcData ecData){
+		try {
+			BooleanQuery query=new BooleanQuery();
+			Query queryid=queryUtil.getNumericRangeQuery("id", ecData.getId());
+			Query indextypeQ=queryUtil.getTermQuery("indexType",ecData.getIndexType());
+			query.add(queryid,Occur.MUST);
+			query.add(indextypeQ,Occur.MUST);
+			getIndexWriter().deleteDocuments(query);
+			return true;
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+	
+	
+	
+}

@@ -1,0 +1,210 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import com.sekorm.core.dao.AttributeFilterMapper;
+import com.sekorm.core.dao.AttributeWeightMapper;
+import com.sekorm.core.dao.IndexSplitRelationMapper;
+import com.sekorm.core.dao.SceneConfigMapper;
+import com.sekorm.core.dao.SplitRelationMapper;
+import com.sekorm.core.dao.WeightRelationMapper;
+import com.sekorm.core.vo.IndexRule;
+import com.sekorm.core.vo.SceneRuleVO;
+import com.sekorm.core.vo.SearchRule;
+
+/**
+ * 
+ * @describe 获取搜索配置规则
+ *
+ * @author bowen_bao
+ * @date 2017年2月11日
+ */
+@Service
+public class RuleService {
+
+	@Autowired
+	private IndexSplitRelationMapper indexSplitRelationMapper;
+	
+	@Autowired
+	private SplitRelationMapper splitRelationMapper;
+	
+	@Autowired
+	private WeightRelationMapper weightRelationMapper;
+	
+	@Autowired
+	private AttributeWeightMapper attributeWeightMapper;
+	
+	@Autowired
+	private AttributeFilterMapper attributeFilterMapper;
+	
+	@Autowired
+	private SceneConfigMapper sceneConfigMapper;
+	
+	/**
+	 * @describe 获取创建索引的规则（创建索引只有一套确定规则，不以场景来划分）
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 */
+	public IndexRule getWriterAnalyzerRule(String env){
+		IndexRule indexRule = new IndexRule();
+		Map<String, Integer> indexMap = new HashMap<String,Integer>();
+		List<Map<String,Object>> result = indexSplitRelationMapper.getIndexRule(env);
+		for(Map<String, Object> map:result){
+			indexMap.put(map.get("attribute").toString(), Integer.parseInt(map.get("analyzer_code").toString()));
+		}
+		indexRule.setAttributeSplit(indexMap);
+		return indexRule;
+	}
+	
+	/**
+	 * @describe 获取所有查询配置规则(除去创建索引的配置规则)
+	 * @author bowen_bao
+	 * @date 2017年2月7日
+	 */
+	public List<SearchRule> getSearchRule(){
+		List<SearchRule> ruleList = new ArrayList<SearchRule>();
+		SearchRule searchRule = null;
+		List<Map<String, Object>> result = sceneConfigMapper.getSceneRule();
+		
+		Integer configCode = null;
+		Integer splitRuleCode = null;
+		Integer weightRuleCode = null;
+		Map<String, Integer> rule = null;
+		Map<String, Float> floatRule = null;
+		Map<String, Map<String,Float>> weightRule = null;
+		Map<String, Map<String,Integer>> filterRule = null;
+		for(Map<String, Object> map:result){
+			searchRule = new SearchRule();
+			searchRule.setSceneCode(Integer.parseInt(map.get("scene_code").toString()));
+			configCode = Integer.parseInt(map.get("config_code").toString());
+			splitRuleCode = Integer.parseInt(map.get("splitrule_code").toString());
+			weightRuleCode = Integer.parseInt(map.get("weightrule_code").toString());
+			//获取分词规则
+			rule = getSplitRuleByCode(splitRuleCode);
+			searchRule.setAttributeSplit(rule);
+			//获取权重配置
+			floatRule =getWeihtRuleByCode(weightRuleCode);
+			searchRule.setAttributeWeight(floatRule);
+			//获取字段内权重
+			weightRule = getAttrWeightByCode(configCode);
+			searchRule.setAttrValWeight(weightRule);
+			//获取字段过滤规则
+			filterRule = getAttrFilterByCode(configCode);
+			searchRule.setAttrValFilter(filterRule);
+			
+			ruleList.add(searchRule);
+		}
+		return ruleList;
+	}
+	/**
+	 * @describe 获取过滤规则
+	 * @author hawii_lai
+	 * @date 2017年2月11日
+	 * @param configCode
+	 * @return Map<String, Map<String, Integer>>
+	 */
+	private Map<String, Map<String, Integer>> getAttrFilterByCode(Integer configCode) {
+		Map<String, Map<String, Integer>> ruleMap = new HashMap<String, Map<String, Integer>>();
+		List<Map<String, Object>> result = attributeFilterMapper.getAttrFilterByCode(configCode);
+		Map<String, Integer> filterMap = null;
+		String attribute = null;
+		for(Map<String, Object> map:result){
+			attribute = map.get("attribute").toString();
+			filterMap = ruleMap.get(attribute);
+			if(filterMap == null){
+				filterMap = new HashMap<String,Integer>();
+			}
+			filterMap.put(map.get("value").toString(), Integer.parseInt(map.get("filter_type").toString()));
+			ruleMap.put(attribute, filterMap);
+		}
+		return ruleMap;
+	}
+	/**
+	 * @describe 获取字段内权重
+	 * @author hawii_lai
+	 * @date 2017年2月11日
+	 * @param configCode
+	 * @return Map<String, Map<String, Float>> 
+	 */
+	private Map<String, Map<String, Float>> getAttrWeightByCode(Integer configCode) {
+		Map<String, Map<String, Float>> ruleMap = new HashMap<String, Map<String, Float>>();
+		List<Map<String, Object>> result = attributeWeightMapper.getAttrWeightByCode(configCode);
+		Map<String, Float> weightMap = null;
+		String attribute = null;
+		for(Map<String, Object> map:result){
+			attribute = map.get("attribute").toString();
+			weightMap = ruleMap.get(attribute);
+			if(weightMap == null){
+				weightMap = new HashMap<String,Float>();
+			}
+			weightMap.put(map.get("value").toString(), Float.parseFloat(map.get("boost").toString()));
+			ruleMap.put(attribute, weightMap);
+		}
+		return ruleMap;
+	}
+	/**
+	 * @describe 获取权重规则
+	 * @author hawii_lai
+	 * @date 2017年2月11日
+	 * @param weightRuleCode
+	 * @return Map<String, Float>
+	 */
+	private Map<String, Float> getWeihtRuleByCode(Integer weightRuleCode) {
+		Map<String, Float> ruleMap = new HashMap<String,Float>();
+		List<Map<String,Object>> result = weightRelationMapper.getWeightRuleByCode(weightRuleCode);
+		for(Map<String, Object> map:result){
+			ruleMap.put(map.get("attribute").toString(), Float.parseFloat(map.get("boost").toString()));
+		}
+		return ruleMap;
+	}
+	/**
+	 * @describe 获取分词规则
+	 * @author hawii_lai
+	 * @date 2017年2月11日
+	 * @param splitRuleCode
+	 * @return Map<String, Integer>
+	 */
+	private Map<String, Integer> getSplitRuleByCode(Integer splitRuleCode) {
+		Map<String, Integer> ruleMap = new HashMap<String,Integer>();
+		List<Map<String,Object>> result = splitRelationMapper.getSplitRuleByCode(splitRuleCode);
+		for(Map<String, Object> map:result){
+			ruleMap.put(map.get("attribute").toString(), Integer.parseInt(map.get("analyzer_code").toString()));
+		}
+		return ruleMap;
+		
+	}
+	/**
+	 * @describe 获取当前的建索引规则
+	 * @author hawii_lai
+	 * @date 2017年3月15日
+	 * @return IndexRule
+	 */
+	@Transactional
+	public IndexRule getCurrentIndexRule(String env) {
+		//删除昨天的规则
+		indexSplitRelationMapper.deleteAll(env);
+		//写入今日有效的规则
+		indexSplitRelationMapper.insertValid(env);
+		return getWriterAnalyzerRule(env);
+	}
+	/**
+	 * @describe 获取所有场景的规则
+	 * @author hawii_lai
+	 * @date 2017年3月15日
+	 * @return List<SceneRuleVO>
+	 */
+	public List<SceneRuleVO> getAllSceneRule(String env) {
+		return sceneConfigMapper.getAllSceneRule(env);
+	}
+	
+	
+	
+	
+	
+	
+}

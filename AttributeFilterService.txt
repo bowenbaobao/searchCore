@@ -1,0 +1,41 @@
+package com.sekorm.core.service;
+
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.common.beans.Page;
+import com.sekorm.core.dao.AttributeFilterMapper;
+import com.sekorm.core.model.AttributeFilter;
+
+
+@Service
+public class AttributeFilterService {
+
+	@Autowired
+	private AttributeFilterMapper attributeFilterMapper;
+	
+	
+	public int deleteByPrimaryKey(Integer id){
+		return attributeFilterMapper.deleteByPrimaryKey(id);
+	}
+	
+	public int insertSelective(AttributeFilter record){
+		return attributeFilterMapper.insertSelective(record);		
+	}
+
+	/**
+	 * @describe  获取过滤规则
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月22日
+	 * @param configCode  场景配置CODE
+	 * @param attributeCode  属性名
+	 * @return 
+	 */
+	public Page<Map<String, Object>> getAttributeFilterList(Integer configCode,Integer attributeCode,Page<Map<String, Object>> page){
+		return attributeFilterMapper.getAttributeFilterList(configCode,attributeCode,page);
+	}
+	
+}

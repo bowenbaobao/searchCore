@@ -1,0 +1,65 @@
+package com.sekorm.core.service;
+
+import java.util.Arrays;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import com.alibaba.dubbo.config.ApplicationConfig;
+import com.alibaba.dubbo.config.MethodConfig;
+import com.alibaba.dubbo.config.ReferenceConfig;
+import com.alibaba.dubbo.config.annotation.Reference;
+import com.sekorm.core.vo.IndexRule;
+import com.sekorm.dubbo.ecm.declare.isearch.AnalyzerDubbo;
+import com.sekorm.dubbo.ecm.declare.isearch.SearchTaskDubbo;
+
+/**
+ * 
+ * @describe 获取元数据的服务类
+ *
+ * @author bowen_bao
+ * @date 2017年1月18日
+ */
+@Service
+public class SwitchService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Reference(timeout=30000)
+	private AnalyzerDubbo analyzerDubbo;
+	
+	@Reference(timeout=30000)
+	private SearchTaskDubbo searchTaskDubbo;
+	
+	public String testSplit(String splitValue, Integer analCode) {
+		return analyzerDubbo.testAnalyzer(splitValue, analCode);
+	}
+
+	public Object testGetDoc(Integer dataId, Integer indexType) {
+		return analyzerDubbo.testGetDoc(dataId,indexType);
+	}
+	
+	public List getScoreDoc(String keyword, Integer dataId1, Integer dataId2, Integer indexType) {
+		return analyzerDubbo.getScoreData(keyword, dataId1, dataId2, indexType);
+	}
+	
+	public void refreshIndustry() {
+		analyzerDubbo.refreshIndustry();
+		
+	}
+	
+	public IndexRule getIndexRule(){
+		return (IndexRule)analyzerDubbo.getIndexRule();
+	}
+
+	public Object semTest(String semWord) {
+		return analyzerDubbo.testSemSearch(semWord);
+	}
+
+	public Object ikTest(String ikword, Integer type) {
+		return analyzerDubbo.ikTest(ikword,type);
+	}
+	
+	
+}

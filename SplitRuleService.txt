@@ -1,0 +1,212 @@
+package com.sekorm.core.service;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.sekorm.common.beans.Page;
+import com.sekorm.core.dao.SceneConfigMapper;
+import com.sekorm.core.dao.SplitAnalyzerMapper;
+import com.sekorm.core.dao.SplitRelationMapper;
+import com.sekorm.core.dao.SplitRuleMapper;
+import com.sekorm.core.model.SceneConfig;
+import com.sekorm.core.model.SplitRelation;
+import com.sekorm.core.model.SplitRule;
+
+
+@Service
+public class SplitRuleService {
+
+	@Autowired
+	private SplitRuleMapper splitRuleMapper;
+	
+	@Autowired
+	private SplitRelationMapper  splitRelationMapper;
+	
+	@Autowired
+	private SplitAnalyzerMapper splitAnalyzerMapper;
+	
+	@Autowired
+	private SceneConfigMapper sceneConfigMapper;
+	
+	
+	public SplitRule selectByPrimaryKey(Integer id){
+		return splitRuleMapper.selectByPrimaryKey(id);
+	}
+	
+	/**
+	 * @describe  根据 分词配置 名称查找
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param 
+	 * @return 
+	 */
+	public SplitRule getSplitRuleByName(String name){
+		return splitRuleMapper.getSplitRuleByName(name);
+	}
+	
+	/**
+	 * @describe  获取 分词
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public List<Map<String, Object>> getSplitAnalyzerList(){
+		return splitAnalyzerMapper.getSplitAnalyzerList();
+	}
+		
+	
+	/**
+	 * @describe  保存 建索引配置
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param  userId 操作人
+	 * @return 
+	 */
+	@Transactional
+	public int saveFlag(Integer id,Integer userId){
+		splitRuleMapper.updateAllFlag(0);
+		SplitRule record=new SplitRule();		
+		record.setId(id);
+		record.setFlag(1);
+		record.setUpdator(userId);
+		record.setUpdateTime(new Date());
+		return splitRuleMapper.updateByPrimaryKeySelective(record);
+	}
+	
+		
+	/**
+	 * @describe  获取 分词配置
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public  Page<Map<String, Object>> getSplitRuleList(Page<Map<String, Object>> page){
+		return splitRuleMapper.getSplitRuleList(page);	 
+	}
+	
+	/**
+	 * @describe  删除 分词配置
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	@Transactional
+	public int deleteSplitRule(Integer id){
+					
+		SplitRule splitRule =splitRuleMapper.selectByPrimaryKey(id);
+		
+		SceneConfig sceneConfig = new SceneConfig();
+		sceneConfig.setSplitruleCode(splitRule.getCode());
+		//判断场景是否使用
+		List<SceneConfig> list = sceneConfigMapper.getSceneConfigListbyCode(sceneConfig);		 //先判断是否被配置
+		if(list ==null || list.size()<=0){
+			if(splitRule != null){
+				splitRelationMapper.deleteByRuleCode(splitRule.getCode());
+				return splitRuleMapper.deleteByPrimaryKey(id);
+			}
+		}
+		
+		return 0;
+		
+	}
+	
+	/**
+	 * @describe  通过最大Code,生成新Code
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public int getMaxCode(){
+		return splitRuleMapper.getMaxCode();					
+	}
+	
+	/**
+	 * @describe  保存  分词配置
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param  arrAttributeCode  属性数组
+	 * @param  arrAnalyzerCode   分词器数组	 
+	 * @return 
+	 */
+	@Transactional
+	public int insertSplitRuleInfo(SplitRule record,String[] arrAttributeCode,Integer[] arrAnalyzerCode){
+		int len =0;		
+							
+		record.setCode(this.getMaxCode());		
+		
+		len = splitRuleMapper.insertSelective(record);
+		this.insertSplitRelation(record, arrAttributeCode, arrAnalyzerCode);	//  分词关系 插入
+		   	    
+	    return len;
+	    
+	}
+	
+	/**
+	 * @describe  分词配置 更新
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param  arrAttributeCode  属性数组
+	 * @param  arrAnalyzerCode   分词器数组	 
+	 * @return 
+	 */
+	@Transactional
+	public int updateSplitRuleInfo(SplitRule record,String[] arrAttributeCode,Integer[] arrAnalyzerCode){
+		int len =0;
+		SplitRule splitRule =splitRuleMapper.selectByPrimaryKey(record.getId());	
+		
+		record.setCode(splitRule.getCode());
+		
+		len = splitRuleMapper.updateByPrimaryKeySelective(record);
+		
+		/* 关联表操作先删除再插入 */
+		splitRelationMapper.deleteByRuleCode(splitRule.getCode());		
+		record.setCreator(record.getUpdator());
+		this.insertSplitRelation(record, arrAttributeCode, arrAnalyzerCode);	
+		
+		return len;
+	}
+	
+	
+	/**
+	 * @describe   分词关系 插入
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param  arrAttributeCode  属性数组
+	 * @param  arrAnalyzerCode   分词器数组	
+	 * @return 
+	 */
+	private int insertSplitRelation(SplitRule record,String[] arrAttributeCode,Integer[] arrAnalyzerCode){
+		int len=0;
+		for(int i=0;i<arrAttributeCode.length;i++){
+			 SplitRelation splitRelation = new SplitRelation();
+			 splitRelation.setAttributeCode(Integer.parseInt(arrAttributeCode[i]));
+			 splitRelation.setAnalyzerCode(arrAnalyzerCode[i]);
+			 splitRelation.setRuleCode(record.getCode());
+			 splitRelation.setCreator(record.getCreator());
+	    			 
+			 len +=splitRelationMapper.insertSelective(splitRelation);
+	    }	  		
+		return len;
+	}
+	
+	
+	
+}

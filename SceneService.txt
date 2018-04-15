@@ -1,0 +1,62 @@
+package com.sekorm.core.service;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.sekorm.core.dao.SceneMapper;
+import com.sekorm.core.model.Scene;
+
+
+@Service
+public class SceneService {
+
+	@Autowired
+	private SceneMapper sceneMapper;
+		
+	/**
+	 * @describe  获取 搜索场景配置分配
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public  List<Map<String, Object>> getSceneList(){
+		return sceneMapper.getSceneList();	 
+	}
+	
+	/**
+	 * @describe 保存 搜索场景配置分配
+	 *
+	 * @author henley_lin
+	 *@date   2017年2月13日
+	 * @param arrSceneId   场景id数组
+	 * @param arrSceneConfig  场景配置数组
+	 * @param userId  操作人
+	 * @return 
+	 */
+	@Transactional
+	public int updateSceneConfig(String[] arrSceneId,Integer[] arrSceneConfig,Integer userId){
+		int len=0;
+		Date nowDate = new Date();
+		for(int i=0;i<arrSceneId.length;i++){
+			 Scene record = new Scene();
+			 record.setConfigCode(arrSceneConfig[i]);
+			 record.setId(Integer.parseInt(arrSceneId[i]));
+			 record.setUpdator(userId);
+			 record.setUpdateTime(nowDate);
+			 len +=sceneMapper.updateByPrimaryKeySelective(record);
+	    }	
+		return len;
+	}
+	
+	
+
+	
+	
+}

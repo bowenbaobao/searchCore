@@ -1,0 +1,143 @@
+package com.sekorm.core.service;
+
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.sekorm.common.beans.Page;
+import com.sekorm.core.dao.AttributeFilterMapper;
+import com.sekorm.core.dao.AttributeWeightMapper;
+import com.sekorm.core.dao.SceneConfigMapper;
+import com.sekorm.core.dao.SceneMapper;
+import com.sekorm.core.model.Scene;
+import com.sekorm.core.model.SceneConfig;
+
+
+
+@Service
+public class SceneConfigService {
+
+	@Autowired
+	private SceneConfigMapper sceneConfigMapper;
+	
+	@Autowired
+	private SceneMapper sceneMapper;
+	
+	@Autowired
+	private AttributeFilterMapper attributeFilterMapper;
+	
+	@Autowired
+	private AttributeWeightMapper attributeWeightMapper;
+	
+	
+	public SceneConfig selectByPrimaryKey(Integer id){
+		return sceneConfigMapper.selectByPrimaryKey(id);
+	}
+		
+	public int updateByPrimaryKeySelective(SceneConfig record){
+		return sceneConfigMapper.updateByPrimaryKeySelective(record);
+	}
+		
+		
+	/**
+	 * @describe  根据场景配置名称查找
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param  
+	 * @return 
+	 */
+	public SceneConfig getSceneConfigByName(String name){
+		return sceneConfigMapper.getSceneConfigByName(name);
+	}
+	
+	/**
+	 * @describe  所有配置
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public  Page<Map<String, Object>> getSceneConfigList(Page<Map<String, Object>> page){
+		return sceneConfigMapper.getSceneConfigList(page);
+	}
+	
+	/**
+	 * @describe  通过最大ConfigCode,生成新ConfigCode
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月21日
+	 * @param
+	 * @return 
+	 */
+	public int getMaxConfigCode(){
+		return sceneConfigMapper.getMaxConfigCode();					
+	}
+	
+	
+	/**
+	 * @describe  新增
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月21日
+	 * @param
+	 * @return 
+	 */
+	public int insertSceneConfigInfo(SceneConfig record){
+		int len =0;		
+					
+		record.setConfigCode(this.getMaxConfigCode());  
+		
+		len = sceneConfigMapper.insertSelective(record);			  
+	    
+	    return len;	    
+	}
+	
+	
+	/**
+	 * @describe  删除
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月21日
+	 * @param
+	 * @return 
+	 */
+	@Transactional
+	public int deleteSceneConfig(Integer id){
+					
+		SceneConfig sceneConfig =sceneConfigMapper.selectByPrimaryKey(id);
+		
+		Scene scene= new Scene();
+		scene.setConfigCode(sceneConfig.getConfigCode());
+		List<Scene> list = sceneMapper.getSceneListbyCode(scene); //先判断是否被配置
+		if(list ==null || list.size()<=0){
+			if(sceneConfig != null){
+				attributeFilterMapper.deleteByConfigCode(sceneConfig.getConfigCode());
+				attributeWeightMapper.deleteByConfigCode(sceneConfig.getConfigCode());
+				return sceneConfigMapper.deleteByPrimaryKey(id);
+			}
+		}
+		
+		return 0;
+		
+	}
+	
+	/**
+	 * @describe  场景配置查看
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月22日
+	 * @param
+	 * @return 
+	 */
+	public List<Map<String, Object>> getSceneConfigJoinList(Integer id){
+		return sceneConfigMapper.getSceneConfigJoinList(id);
+	}
+	
+		
+	
+}

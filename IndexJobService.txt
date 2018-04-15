@@ -1,0 +1,111 @@
+package com.sekorm.core.service;
+
+import java.util.List;
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import com.sekorm.core.model.EcData;
+import com.sekorm.core.vo.IndexRule;
+
+/**
+ * 
+ * @describe 索引更新job类
+ *
+ * @author bowen_bao
+ * @date 2017年2月22日
+ */
+@Service
+public class IndexJobService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Autowired
+	private EcDataService ecDataService;
+	
+	@Autowired
+	private IndexService indexService;
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Autowired
+	private AnalyzerService analyzerService;
+	
+	private Integer jobStatus = 0;
+	
+	
+	/**
+	 * 
+	 * @describe 更新索引库
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月22日
+	 * @param  updateTime:按更新时间来更新索引
+	 *         null:刷新全部
+	 * @return
+	 */
+	public synchronized Integer refreshAllIndex(String updateTime){
+		if(jobStatus == 1 && updateTime != null){
+			logger.info("正在刷全量缓存....增量缓存放弃");
+			return -1;
+		}
+		try {
+			if(updateTime == null){
+				jobStatus = 1;
+			}
+			
+			logger.info("********searchCode IndexJobService refreshAllIndex ******** updateTime:"+updateTime+"*****start****");
+			
+			
+			//先删除需要删除的索引
+			if(updateTime != null) {
+				logger.info("****** indexJob del EcdateList***** start****");
+				List<EcData> delList=ecDataService.getDelEcData(updateTime);
+				for(EcData ecData:delList){
+					indexService.deleteSingle(ecData);
+				}
+				logger.info("****** indexJob del EcdateList***** end****");
+			}
+			
+			
+			
+			//获取元数据
+			logger.info("+++++++++++获取源数据+++++++++++++");
+			List<EcData> list=ecDataService.getEcData(updateTime);
+			logger.info("+++++++++++获取源数据SIZE:"+list.size()+"+++++++++++++");
+			if(StringUtils.isEmpty(updateTime)){
+				indexService.clearIndexWriter();//每次建索引都需要重新获取建索引的分词配置(每晚刷新)
+			}
+			IndexRule writerAnalyzerRule=ecCacheService.getIndexRule();
+			
+			//添加行业词库
+			logger.info("++++++++++++添加行业词库+++++++++++");
+			analyzerService.addIKWords(ecCacheService.getIKWordsList(), null);
+			
+			logger.info("+++++++++删除所有索引++++++++++++");
+			if(StringUtils.isEmpty(updateTime)&& list.size()>0){
+				indexService.deleteAll();
+			}
+			logger.info("+++++++++开始创建索引++++++++++++");
+			//创建索引
+			for(EcData ecData:list){
+				indexService.createOrUpdate(ecData,writerAnalyzerRule);
+			}
+			//刷新缓存
+			logger.info("++++++++提交索引+++++++++++++");
+			indexService.commitIndex();
+			jobStatus = 0;
+			
+			logger.info("********searchCode IndexJobService refreshAllIndex ******** updateTime:"+updateTime+"*****end****");
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			logger.error(e.getMessage());
+			return -1;
+		}finally{
+			jobStatus = 0;
+		}
+		return 0;
+	}
+}

@@ -1,0 +1,867 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+import org.apache.commons.collections.CollectionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import com.alibaba.dubbo.config.annotation.Reference;
+import com.alibaba.dubbo.rpc.RpcException;
+import com.sekorm.cache.ecm.service.BrandCacheService;
+import com.sekorm.cache.ecm.service.ElecCacheService;
+import com.sekorm.cache.ecm.service.GoodsCacheService;
+import com.sekorm.cache.ecm.service.PlCacheService;
+import com.sekorm.cache.ecm.service.PnCacheService;
+import com.sekorm.cache.ecm.service.SeriesCacheService;
+import com.sekorm.cache.ecm.util.BaseDataKeys;
+import com.sekorm.cache.ecm.util.DataType;
+import com.sekorm.cache.ecm.util.RedisThreadPool;
+import com.sekorm.cache.ecm.vo.BrandTreeVO;
+import com.sekorm.cache.ecm.vo.ElecTreeVO;
+import com.sekorm.cache.ecm.vo.GoodsTreeVO;
+import com.sekorm.common.util.JacksonUtils;
+import com.sekorm.common.util.StringUtils;
+import com.sekorm.core.common.ExceptionLogger;
+import com.sekorm.core.dao.EcDataMapper;
+import com.sekorm.core.dao.KeywordMapper;
+import com.sekorm.core.model.EcData;
+import com.sekorm.dubbo.ecm.beans.isupport.BrandCategoryDO;
+import com.sekorm.dubbo.ecm.beans.isupport.ElecCategoryDO;
+import com.sekorm.dubbo.ecm.beans.isupport.GoodsCategoryDO;
+import com.sekorm.dubbo.ecm.beans.isupport.PartNumberDO;
+import com.sekorm.dubbo.ecm.beans.isupport.SeriesDO;
+import com.sekorm.dubbo.ecm.beans.isupport.SeriesTypeDO;
+import com.sekorm.dubbo.ecm.declare.isearch.SearchTaskDubbo;
+import com.sekorm.dubbo.ecm.declare.isupport.PartNumberDubbo;
+
+import redis.clients.jedis.Jedis;
+
+/**
+ * 
+ * @describe 获取元数据的服务类
+ *
+ * @author bowen_bao
+ * @date 2017年1月18日
+ */
+@Service
+public class EcDataService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Autowired
+	private KeywordMapper keywordMapper;
+	
+	@Autowired
+	private EcDataMapper ecDataMapper;
+	
+	@Autowired
+	private ElecCacheService elecCacheService;
+	
+	@Autowired
+	private BrandCacheService brandCacheService;
+	
+	@Autowired
+	private GoodsCacheService goodsCacheService;
+	
+	@Autowired
+	private PnCacheService pnCacheService;
+	
+	@Autowired
+	private PlCacheService plCacheService;
+	
+	@Autowired
+	private SeriesCacheService seriesCacheService;
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Reference(timeout=6000)// 获取所有的pn耗时较长
+	private PartNumberDubbo partNumberDubbo;
+	
+	@Reference(retries=-1,timeout=6000000)
+	private SearchTaskDubbo searchTaskDubbo;
+	
+	@Autowired
+	private ExceptionLogger exceptionLogger;
+	
+	private Map<String, String[]> pnMap;
+	
+	
+	/**
+	 * @describe 获取EcData
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 * @param updateTime 按照更新时间获取元数据，    null:全部
+	 * @return
+	 */
+	public List<EcData> getEcData(String updateTime){
+		long starTime=System.currentTimeMillis();
+		List<EcData> result = null;
+		boolean increment = false;
+		if(updateTime != null){
+			increment = true;
+			result = ecDataMapper.selectAllEcData(updateTime);
+		}else{
+			increment = false;
+			result = ecDataMapper.getAllNews();
+			result.addAll(ecDataMapper.getAllDocs());
+			result.addAll(ecDataMapper.getAllPgc());
+		}
+
+		List<EcData> chapterList = ecDataMapper.selectChapterData(updateTime);
+		long endTime=System.currentTimeMillis();
+		logger.info("源数据获取耗时："+(endTime-starTime)+"毫秒(共"+result.size()+"条记录)");
+		chapterList = dealPnData(chapterList);
+		result.addAll(chapterList);
+		return doProcess(result, increment);
+		
+	}
+	/**
+	 * 
+	 * @Description 获取已删除内容  indexType,  id
+	 * @author hawii_lai
+	 * @date 2018年3月26日 上午9:38:03 
+	 * @param @param updateTime
+	 */
+	public List<EcData> getDelEcData(String updateTime){
+		List<EcData> result = ecDataMapper.getAllDelEcData(updateTime);
+		return result;
+		
+	}
+	
+	
+	/**
+     * @return 对源数据设置市场、商品分类、厂牌、pnl等信息
+     */
+    public List<EcData> doProcess(List<EcData> searchEcObjs, boolean increment) {
+    	long starTime=System.currentTimeMillis();
+
+    	//遍历列表设置goodsName、elecName、brandName、Pn、PlAndS
+    	String keyType = null;
+    	
+        for (EcData searchEcObj : searchEcObjs) {
+        	String pnCode = null;
+        	String pnType = null;
+        	if("1".equals(searchEcObj.getIndexType())){
+        		searchEcObj.setEcNewid(searchEcObj.getId());
+        		searchEcObj.setDocCode(0);
+        		keyType = BaseDataKeys.ECNEW_KEY;
+        	}else if("2".equals(searchEcObj.getIndexType())){
+        		searchEcObj.setEcDocid(searchEcObj.getId());
+        		searchEcObj.setTouristFlag("0");
+        		searchEcObj.setWebShow("1");
+        		searchEcObj.setAppShow("1");
+        		keyType = BaseDataKeys.ECDOC_KEY;
+        	}else if("3".equals(searchEcObj.getIndexType())){
+        		searchEcObj.setQuestionid(searchEcObj.getId());
+        		searchEcObj.setSubType("提问");
+        		searchEcObj.setDocCode(0);
+        		keyType = null;
+        	}else if("6".equals(searchEcObj.getIndexType())){
+        		searchEcObj.setDocCode(0);
+        		keyType = null;
+        	}
+        	
+        	String tempStr = null;
+        	//设置商品分类
+        	String codeStr = null;
+        	if(increment || keyType == null){
+        		codeStr = searchEcObj.getGoodsCode();
+        	}else{
+        		codeStr = ecCacheService.getGoodByEcId(keyType, searchEcObj.getId()+"");
+        	}
+        	
+        	String[] codeArr = null;
+        	GoodsCategoryDO goodsCategoryDO = null;
+        	Set<String> tempSet = new HashSet<String>();
+        	Set<String> subSet = new HashSet<String>();
+        	try{
+	        	if(codeStr != null){
+	        		codeArr = codeStr.split(",");
+	        		for(String str:codeArr){
+	        			try {
+							goodsCategoryDO = goodsCacheService.getByCode(Integer.parseInt(str));
+							if(goodsCategoryDO != null){
+								tempSet.add(goodsCategoryDO.getName());
+								tempStr = goodsCategoryDO.getAlias();
+								if(!"null".equals(tempStr) && tempStr != null){
+									tempSet.add(tempStr);
+								}
+							}
+						} catch (Exception e) {
+							logger.error(e.getMessage(),e);
+							exceptionLogger.debug("获取商品分类信息失败goodsCode="+str);
+						}
+	        		}
+	        		if(tempSet.size()>0){
+	        			tempStr = "";
+	        			for(String str:tempSet){
+	        				tempStr += ","+str;
+	        			}
+	        			tempStr = tempStr.substring(1);
+	        			searchEcObj.setGoodsName(tempStr);
+	        			tempSet.clear();
+	        		}
+	        	}
+	        	//设置厂牌
+	        	if(increment || keyType == null){
+	        		codeStr = searchEcObj.getBrandCode();
+	        	}else{
+	        		codeStr = ecCacheService.getBrandByEcId(keyType, searchEcObj.getId()+"");
+	        	}
+	        	BrandCategoryDO brandCategoryDO = null;
+	        	if(codeStr != null){
+	        		codeArr = codeStr.split(",");
+	        		for(String str:codeArr){
+	        			try {
+							brandCategoryDO = brandCacheService.getByCode(Integer.parseInt(str));
+							if(brandCategoryDO != null){
+								if(brandCategoryDO.getParentId() == 0){ //brandName
+									tempSet.add(brandCategoryDO.getName());
+								}
+							}
+						} catch (Exception e) {
+							logger.error(e.getMessage(),e);
+							exceptionLogger.debug("获取厂牌信息失败BrandCode="+str);
+						}
+	        		}
+	        		if(tempSet.size()>0){
+	        			tempStr = "";
+	        			for(String str:tempSet){
+	        				tempStr += ","+str;
+	        			}
+	        			tempStr = tempStr.substring(1);
+	        			searchEcObj.setBrandName(tempStr);
+	        			tempSet.clear();
+	        		}
+	        	}
+	        	//设置市场名称和别名
+	        	ElecCategoryDO elecCategoryDO = null;
+	        	if(increment || keyType == null){
+	        		codeStr = searchEcObj.getElec();
+	        	}else{
+	        		codeStr = ecCacheService.getELECByEcId(keyType, searchEcObj.getId()+"");
+	        	}
+	        	if(codeStr != null){
+	        		codeArr = codeStr.split(",");
+	        		for(String str:codeArr){
+	        			try {
+							elecCategoryDO = elecCacheService.getByCode(Integer.parseInt(str));
+		        			if(elecCategoryDO != null){
+		        				tempSet.add(elecCategoryDO.getName());
+		        				tempStr=elecCategoryDO.getAlias();
+		        				if(!"null".equals(tempStr) && tempStr != null){
+		        					tempSet.add(tempStr); 
+		        				}
+		        			}
+	        			} catch (Exception e) {
+	        				logger.error(e.getMessage(),e);
+	        				exceptionLogger.debug("获取市场信息失败elecCode="+str);
+						}
+	        		}
+	        		
+	        		if(tempSet.size()>0){
+	        			tempStr = "";
+	        			for(String str:tempSet){
+	        				tempStr += ","+str;
+	        			}
+	        			tempStr = tempStr.substring(1);
+	        			searchEcObj.setElecName(tempStr);
+	        			tempSet.clear();
+	        		}
+	        	}
+	        	if(!increment && keyType != null){
+	        		codeStr = ecCacheService.getPNByEcId(keyType, searchEcObj.getId()+"");
+	        		
+	        		if(codeStr != null){
+	        			pnCode = "";
+	        			pnType = "";
+		        		codeArr = codeStr.split(",");
+		        		for(int i=0; i<codeArr.length; i+=2){
+		        			pnCode += "," + codeArr[i+1];
+		        			pnType += "," + codeArr[i];
+		        		}
+		        		if(pnCode.length() > 1){
+		        			pnCode = pnCode.substring(1);
+		        			pnType = pnType.substring(1);
+		        		}
+	        		}
+	        	}else{
+	        		pnCode = searchEcObj.getPnCode();
+		        	pnType = searchEcObj.getPnType();
+	        	}
+	        	String pnName = "";
+	        	String resembleCode = "";
+	        	
+	        	if(pnCode != null && pnType != null){
+	        		PartNumberDO partNumberDO = null;
+	            	SeriesTypeDO seriesTypeDO = null;
+	            	SeriesDO seriesDO = null;
+	        		String[] pnCodeArray = pnCode.split(",");
+	            	String[] pnTypeArray = pnType.split(",");
+	            	Jedis jedis = null;
+	            	for (int i = 0; i < pnCodeArray.length; i++) {
+						if (pnTypeArray[i].equals("0")){
+							try {
+								partNumberDO = pnCacheService.getByCode(Integer.parseInt(pnCodeArray[i]));
+							} catch (Exception e) {
+								exceptionLogger.debug("通过缓存获取Pn失败pnCode="+pnCodeArray[i]);
+							}
+							if(partNumberDO != null && partNumberDO.getGoodsStatus()==0){
+								//设置Pn
+								tempStr = partNumberDO.getName();
+								if(!pnName.contains(","+tempStr)){
+									pnName+=","+tempStr;
+								}
+								tempStr = partNumberDO.getResembleCode();
+								if(!resembleCode.contains(","+tempStr)){
+									resembleCode+=","+tempStr;
+								}
+			            	 }
+							
+						}else if (pnTypeArray[i].equals("1")){
+							try {
+								seriesTypeDO = plCacheService.getByCode(Integer.parseInt(pnCodeArray[i]));
+							} catch (Exception e) {
+								exceptionLogger.debug("通过缓存获取Pl失败plCode="+pnCodeArray[i]);
+							}
+							if(seriesTypeDO != null && seriesTypeDO.getSeriestypeStatus()==0){
+								//设置plName
+								tempStr = seriesTypeDO.getName();
+								if(!pnName.contains(","+tempStr)){
+									pnName+=","+tempStr;
+								}
+			            	}
+							//获取下级
+							try {
+								jedis = RedisThreadPool.getJedis(DataType.BASE);
+								tempSet = jedis.smembers(BaseDataKeys.getKey(pnCodeArray[i], BaseDataKeys.PL_KEY,BaseDataKeys.CHILD_KEY));
+								if(tempSet != null)
+								subSet.addAll(tempSet);
+							} catch (Exception e) {
+								exceptionLogger.debug("pl获取关系失败plCode"+pnCodeArray[i]);
+							}finally{
+								jedis.close();
+							}
+						}else if (pnTypeArray[i].equals("2")){
+							try {
+								seriesDO = seriesCacheService.getByCode(Integer.parseInt(pnCodeArray[i]));
+							} catch (Exception e) {
+								exceptionLogger.debug("通过缓存获取S失败sCode="+pnCodeArray[i]);
+							}
+							if(seriesDO != null && seriesDO.getSeriesStatus()==0){
+								//设置sName
+								tempStr = seriesDO.getName();
+								if(!pnName.contains(","+tempStr)){
+									pnName+=","+tempStr;
+								}
+			            	 }
+							//获取下级
+							try {
+								jedis = RedisThreadPool.getJedis(DataType.BASE);
+								tempSet = jedis.smembers(BaseDataKeys.getKey(pnCodeArray[i], BaseDataKeys.S_KEY,BaseDataKeys.CHILD_KEY));
+								if(tempSet != null)
+								subSet.addAll(tempSet);
+							} catch (Exception e) {
+								exceptionLogger.debug("S获取关系失败sCode="+pnCodeArray[i]);
+							}finally{
+								jedis.close();
+							}
+							
+						}
+	            	}
+	        	}
+	        	for(String str : subSet){
+	        		pnName += "," + str;
+	        	}
+	        	
+	        	if(pnName.length()>0){
+	        		searchEcObj.setPnName(pnName.substring(1));
+	        	}
+	        	
+	        	if(resembleCode.length()>0){
+	        		searchEcObj.setPnResembleCode(resembleCode.substring(1));
+	        	}
+        	}catch(Exception e){
+        		exceptionLogger.debug("数据源处理失败"+searchEcObj.getId()+"|"+searchEcObj.getIndexType());
+//        		logger.error(e.getMessage(),e);
+        		e.printStackTrace();
+        	}
+        }
+        long endTime=System.currentTimeMillis();
+        
+        logger.info("EcDataService doProcess() 耗时："+(endTime-starTime)+"毫秒");
+        return searchEcObjs;
+    }
+
+	/*
+	 * 去重
+	 */
+	private List<String> removeRepeat(List<String> list) {
+		if (CollectionUtils.isEmpty(list)) {
+			return list;
+		}
+		logger.info("去重之前记录数: {}", list.size());
+		Set<String> set = new HashSet<String>();
+		set.addAll(list);
+		List<String> returnList = new ArrayList<String>(set);
+		logger.info("去重之后记录数: {}", returnList.size());
+		return returnList;
+	}
+	
+//	private List<String> getAllKeyword() {
+//		logger.info("获取所有关键词开始...");
+//		List<String> list = keywordMapper.getAllSysKeyword();
+//		if (CollectionUtils.isEmpty(list)) {
+//			return null;
+//		}
+//		List<String> lowerCaseList = new ArrayList<String>();
+//		for (String keyword : list) {
+//			if (StringUtils.isNotBlank(keyword)) {
+//				lowerCaseList.add(keyword.toLowerCase());
+//			}
+//		}
+//		logger.info("获取所有关键词结束(共{}条记录)...", lowerCaseList.size());
+//		return removeRepeat(lowerCaseList);
+//	}
+
+	/**
+	 * 
+	 * 查询所有市场名
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年2月11日
+	 * @param 
+	 * @return 全部转成小写
+	 */
+	public List<String> getAllElec() {
+		logger.info("获取所有应用市场开始...");
+		String json = elecCacheService.getElecTree();
+		List<ElecTreeVO> list = JacksonUtils.toBean(json, List.class, ElecTreeVO.class);
+		List<String> out = new ArrayList<String>();
+		getChildrenElec(list, out);
+		logger.info("获取所有应用市场结束(共{}条记录)...", out.size());
+		if (CollectionUtils.isEmpty(out)) {
+			exceptionLogger.debug("从缓存获取所有市场数据失败");
+		}
+		return removeRepeat(out);
+	}
+	private void getChildrenElec(List<ElecTreeVO> list, List<String> out) {
+		if (CollectionUtils.isNotEmpty(list)) {
+			for (ElecTreeVO vo : list) {
+				if (StringUtils.isNotBlank(vo.getName())) {
+					out.add(vo.getName().toLowerCase());
+				}
+				if (StringUtils.isNotBlank(vo.getAlias())) {//别名
+					CollectionUtils.addAll(out, vo.getAlias().toLowerCase().split(","));
+				}
+				getChildrenElec(vo.getChildren(), out);
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * 查询所有顶级厂牌
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年2月11日
+	 * @param 
+	 * @return 全部转成小写
+	 */
+	public List<String> getAllTopBrand() {
+		logger.info("获取所有顶级厂牌开始...");
+		String json = brandCacheService.getBrandTree();
+		List<BrandTreeVO> list = JacksonUtils.toBean(json, List.class, BrandTreeVO.class);
+		List<String> out = new ArrayList<String>();
+		if (CollectionUtils.isNotEmpty(list)) {// 只需要顶级的厂牌
+			for (BrandTreeVO vo : list) {
+				if (StringUtils.isNotBlank(vo.getName())) {
+					out.add(vo.getName().toLowerCase());
+				}
+				if (StringUtils.isNotBlank(vo.getAlias())) {//别名
+					CollectionUtils.addAll(out, vo.getAlias().toLowerCase().split(","));
+				}
+			}
+		}
+		logger.info("获取所有顶级厂牌结束(共{}条记录)...", out.size());
+		if (CollectionUtils.isEmpty(out)) {
+			exceptionLogger.debug("从缓存获取所有厂牌数据失败");
+		}
+		return removeRepeat(out);
+	}
+	
+	/**
+	 * 
+	 * 查询所有产品线
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年4月5日
+	 * @param 
+	 * @return 全部转成小写
+	 */
+	public List<String> getAllProductLine() {
+		logger.info("获取所有产品线开始...");
+		String json = brandCacheService.getBrandTree();
+		List<BrandTreeVO> list = JacksonUtils.toBean(json, List.class, BrandTreeVO.class);
+		List<String> out = new ArrayList<String>();
+		if (CollectionUtils.isNotEmpty(list)) {// 排除顶级的厂牌
+			for (BrandTreeVO vo : list) {
+				getChildrenBrand(vo.getChildren(), out);
+			}
+		}
+		logger.info("获取所有产品线结束(共{}条记录)...", out.size());
+		if (CollectionUtils.isEmpty(out)) {
+			exceptionLogger.debug("从缓存获取所有产品线数据失败");
+		}
+		return removeRepeat(out);
+	}
+	private void getChildrenBrand(List<BrandTreeVO> list, List<String> out) {
+		if (CollectionUtils.isNotEmpty(list)) {
+			for (BrandTreeVO vo : list) {
+				if (StringUtils.isNotBlank(vo.getName())) {
+					out.add(vo.getName().toLowerCase());
+				}
+				if (StringUtils.isNotBlank(vo.getAlias())) {//别名
+					CollectionUtils.addAll(out, vo.getAlias().toLowerCase().split(","));
+				}
+				getChildrenBrand(vo.getChildren(), out);
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * 查询所有商品名
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年2月11日
+	 * @param 
+	 * @return 全部转成小写
+	 */
+	public List<String> getAllGoods() {
+		logger.info("获取所有商品(新、旧分类)开始...");
+		String json1 = goodsCacheService.getNewGoodsTree();// 对应后台旧分类
+		String json2 = goodsCacheService.getGoodsTree();// 对应后台新分类
+		List<GoodsTreeVO> list1 = JacksonUtils.toBean(json1, List.class, GoodsTreeVO.class);
+		List<GoodsTreeVO> list2 = JacksonUtils.toBean(json2, List.class, GoodsTreeVO.class);
+		List<String> out = new ArrayList<String>();
+		getChildrenGoods(list1, out);
+		getChildrenGoods(list2, out);
+		logger.info("获取所有商品结束(共{}条记录)...", out.size());
+		if (CollectionUtils.isEmpty(out)) {
+			exceptionLogger.debug("从缓存获取所有商品数据失败");
+		}
+		return removeRepeat(out);
+	}
+	private void getChildrenGoods(List<GoodsTreeVO> list, List<String> out) {
+		if (CollectionUtils.isNotEmpty(list)) {
+			for (GoodsTreeVO vo : list) {
+				if (StringUtils.isNotBlank(vo.getName())) {
+					out.add(vo.getName().toLowerCase());
+				}
+				if (StringUtils.isNotBlank(vo.getAlias())) {//别名
+					CollectionUtils.addAll(out, vo.getAlias().toLowerCase().split(","));
+				}
+				getChildrenGoods(vo.getChildren(), out);
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * 获取所有PN/PL/S
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年2月20日
+	 * @param 
+	 * @return 全部转成小写
+	 */
+	public List<String> getAllPnPlS() {
+		logger.info("获取所有PN/PL/S开始...");
+		List<String> result = new ArrayList<String>();
+		try {
+			// 获取所有的PN/PL/S
+			List<Map<Object, Object>> list = partNumberDubbo.selectAllData(null);
+			if (CollectionUtils.isNotEmpty(list)) {
+				for (Map<Object, Object> item : list) {
+					String pnName = (String) item.get("pnName");
+					if (StringUtils.isNotBlank(pnName)) {
+						result.add(pnName.toLowerCase());
+					}
+				}
+			}
+			// 获取所有的对照型号
+			List<String> resembleCodeList = partNumberDubbo.getAllResembleCode();
+			if (CollectionUtils.isNotEmpty(resembleCodeList)) {
+				for (String codes : resembleCodeList) {
+					CollectionUtils.addAll(result, codes.toLowerCase().split(","));
+				}
+			}
+		} catch (RpcException e) {
+			exceptionLogger.debug("dubbo调用获取所有PN/PL/S异常");
+			logger.error(e.getMessage(), e);
+		}
+		logger.info("获取所有PN/PL/S结束(共{}条记录)...", result == null ? 0 : result.size());
+		if (CollectionUtils.isEmpty(result)) {
+			exceptionLogger.debug("dubbo调用获取所有PN/PL/S失败");
+		}
+		return removeRepeat(result);
+	}
+	
+	public void flushAll() {
+		searchTaskDubbo.flushAll();
+	}
+	public Integer getElecLevel(String code){
+		Integer currentCode = Integer.parseInt(code);
+		ElecCategoryDO ecd = elecCacheService.getByCode(currentCode);
+		Integer level = 1;
+		while(true){
+			if(ecd == null){
+				break;
+			}
+			if(ecd.getParentId() == 0){
+				break;
+			}else{
+				level ++;
+				ecd = elecCacheService.getParent(currentCode);
+				currentCode = ecd.getCode();
+			}
+		}
+		return level;
+	}
+	
+	public Object testMetaData(Integer dataId, Integer indexType) {
+		List<EcData> result = ecDataMapper.getDemoData(dataId,indexType);
+		if(indexType == 6){
+			result = dealPnData(result);
+		}
+		result = doProcess(result,true);
+		if(result.size()>0){
+			EcData ecData = result.get(0);
+			ecData.setDetail("");
+			ecData.setImg1("");
+			ecData.setImg2("");
+			ecData.setImg3("");
+			ecData.setImg4("");
+			ecData.setImg5("");
+			ecData.setImg6("");
+			ecData.setImg7("");
+			ecData.setImg8("");
+			return ecData;
+		}
+		return null;
+	}
+	/**
+	 * 获取所有的PN并设置到内存中
+	 */
+	public Map<String, String[]> getAllPnCache(){
+		Map pnMap = new HashMap<String, String[]>();
+		Jedis jedis = RedisThreadPool.getJedis(DataType.BASE);
+		try{
+			Map<String, String> map = null;
+			Set<String> keys = jedis.keys("*_PN");
+			String reg = "[0-9]{1,}_PN";
+			Pattern pattern = Pattern.compile(reg);
+			for(String key:keys){
+				if(pattern.matcher(key).matches()){
+					map = jedis.hgetAll(key);
+					pnMap.put(map.get("name"), new String[]{map.get("pnCode"),"0"});
+				}
+			}
+			keys = jedis.keys("*_PL");
+			reg = "[0-9]{1,}_PL";
+			pattern = Pattern.compile(reg);
+			for(String key:keys){
+				if(pattern.matcher(key).matches()){
+					map = jedis.hgetAll(key);
+					pnMap.put(map.get("name"), new String[]{map.get("plCode"),"1"});
+				}
+			}
+			keys = jedis.keys("*_S");
+			reg = "[0-9]{1,}_S";
+			pattern = Pattern.compile(reg);
+			for(String key:keys){
+				if(pattern.matcher(key).matches()){
+					map = jedis.hgetAll(key);
+					pnMap.put(map.get("name"), new String[]{map.get("sCode"),"2"});
+				}
+			}
+		}finally{
+			jedis.close();
+		}
+		return pnMap;
+	}
+	
+	/**
+	 * @description 处理PN
+	 * @param chapterList
+	 * @return
+	 */
+	private List<EcData> dealPnData(List<EcData> chapterList){
+		String pnCode = null;
+		String pnArr[] = null;
+		String typeArr[] = null;
+		String pnCodes = null;
+		String pnTypes = null;
+		if(pnMap == null){
+			pnMap = getAllPnCache();
+		}
+		for(EcData ecData : chapterList){
+			pnCode = ecData.getPnCode();
+			ecData.setPnCode(null);
+			if(pnCode != null && !"".equals(pnCode)){
+				pnCodes = "";
+				pnTypes = "";
+				pnArr = pnCode.split(",");
+				for(String name : pnArr){
+					try {
+						typeArr = pnMap.get(name);
+						if(typeArr == null){//非系统的PN当关键词处理
+							ecData.setKeyword(ecData.getKeyword()+","+name);
+							continue;
+						}
+					} catch (Exception e) {
+						ecData.setKeyword(ecData.getKeyword()+","+name);
+						continue;
+					}
+					pnCodes += "," + typeArr[0];
+					pnTypes += "," + typeArr[1];
+				}
+				if(pnCodes.length() > 0){
+					pnCodes = pnCodes.substring(1);
+					ecData.setPnCode(pnCodes);
+				}
+				if(pnTypes.length() > 0){
+					pnTypes = pnTypes.substring(1);
+					ecData.setPnType(pnTypes);
+				}
+			}
+		}
+		return chapterList;
+	}
+	
+	
+	List<String> getPnExpandWord(String pn){
+		return ecDataMapper.getPnExpandWord(pn);
+	}
+	
+	
+	
+	
+//	/**
+//	 * @describe 根据q 获取场景规则
+//	 * @author bowen_bao
+//	 * @date 2017年2月11日
+//	 * @param
+//	 * @return
+//	 */
+//	public SearchRule getSceneRuleByQ(SearchParam searchDI,SearchVO searchVO){
+//		
+//		String q=searchDI.getQ();
+//		Integer sceneCode=SearchCoreConstant.SCENE_SEARCH_CODE;
+//		q=q.toLowerCase();//全部转小写
+//		
+//		String sceneWord=q;
+//		searchVO.setSceneWord(sceneWord);
+//		
+//		//****************判断是否是SEM 厂牌词
+////		List<String> qList=analyzerService.ikAnalyzerQ(q, analyzerService.getIKAnalyzer(true));
+//		List<String> qList= null; //getSemBrandList();
+//		System.out.println("qList size======"+qList.size());
+//		String semQ="";//用于传入SEM 搜索词
+//		String semScene=q;//用于SEM 场景判断
+//		
+//		if(getSemBrandSet().contains(q)){
+//			logger.info("****************** 走普通场景");
+//			return getSearchRuleBySceneCode(sceneCode);
+//		}else if(sysBrandSet.contains(q)) {
+//			logger.info("****************** 走厂牌场景");
+//			sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+//			return getSearchRuleBySceneCode(sceneCode);
+//		}else{
+//			for(String s:qList){
+//				if(semScene.contains(s)){
+//					semScene=semScene.replaceAll(s, ",");
+//					semQ+=s+",";
+//				}
+//			}
+//			semQ=semQ+semScene;
+//		}
+//		
+//		
+//		
+//		String[] semSceneArr=semScene.split(",");
+//		for(int i=0;i<semSceneArr.length;i++) {
+//			semSceneArr[i]=semSceneArr[i].trim();
+//		}
+//		//**************************判断系统4大场景不分词
+//		for(String s:semSceneArr) {
+//			if(s==null || s.equals("")) {
+//				continue;
+//			}
+//			if(sysMap.get(s)!=null && 1==sysMap.get(s)){//系统厂牌分值
+//				sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				logger.info("****************** 走厂牌分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}else if(sysMap.get(s)!=null &&  2==sysMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+//				logger.info("****************** 走商品分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}else if(sysMap.get(s)!=null && 3==sysMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_ELEC_CODE;
+//				logger.info("****************** 走市场分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}else if(sysMap.get(s)!=null && 4==sysMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_PNPLS_CODE;
+//				logger.info("****************** 走PN分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}
+//		}
+//		
+//		//**************SEM库识别    1:竞品厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+//		for(String s:semSceneArr) {
+//			if(s==null || s.equals("")) {
+//				continue;
+//			}
+//			if(semMap.get(s)!=null && 2==semMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_SEM_GOODS_CODE;
+//				logger.info("****************** 走sem商品分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}else if(semMap.get(s)!=null && 3==semMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_SEM_ELEC_CODE;
+//				logger.info("****************** 走sem市场分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}else if(semMap.get(s)!=null && 4==semMap.get(s)){
+//				searchVO.setSceneWord(s);
+//				searchDI.setQ(semQ);
+//				sceneCode=SearchCoreConstant.SCENE_SEM_PNPLS_CODE;
+//				logger.info("****************** 走sem-PN分支");
+//				return getSearchRuleBySceneCode(sceneCode);
+//			}
+//		}
+//		
+//		return getSearchRuleBySceneCode(sceneCode);
+//	}
+	
+	
+}

@@ -1,0 +1,42 @@
+package com.sekorm.core.service;
+
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.common.beans.Page;
+import com.sekorm.core.dao.AttributeWeightMapper;
+import com.sekorm.core.model.AttributeWeight;
+
+
+@Service
+public class AttributeWeightService {
+
+	@Autowired
+	private AttributeWeightMapper attributeWeightMapper;
+	
+	
+	public int deleteByPrimaryKey(Integer id){
+		return attributeWeightMapper.deleteByPrimaryKey(id);
+	}
+	
+	public int insertSelective(AttributeWeight record){
+		return attributeWeightMapper.insertSelective(record);		
+	}
+
+	/**
+	 * @describe  获取字段内权重
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月22日
+	 * @param configCode  场景配置CODE
+	 * @param attributeCode  属性名
+	 * @return 
+	 */
+	public Page<Map<String, Object>> getAttributeWeightList(Integer configCode,Integer attributeCode,Page<Map<String, Object>> page){
+		return attributeWeightMapper.getAttributeWeightList(configCode,attributeCode,page);
+	}
+	
+	
+}

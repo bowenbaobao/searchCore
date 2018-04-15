@@ -1,0 +1,39 @@
+package com.sekorm.core.service;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.dao.SearchExceptionMapper;
+import com.sekorm.core.model.SearchException;
+
+/**
+ * 
+ * 搜索异常记录 
+ *
+ * @author cheney_zhang
+ * @date 2017年3月14日
+ */
+@Service
+public class SearchExceptionService {
+	
+	@Autowired
+	private SearchExceptionMapper searchExceptionMapper;
+
+	/**
+	 * 
+	 * 新增一笔搜索异常
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月14日
+	 * @param 
+	 * @return
+	 */
+    public int insertSelective(SearchException record) {
+    	return searchExceptionMapper.insertSelective(record);
+    }
+
+	public void deleteAll() {
+		searchExceptionMapper.deleteAll();
+	}
+
+}

@@ -1,0 +1,74 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import redis.clients.jedis.Jedis;
+
+import com.sekorm.cache.ecm.util.DataType;
+import com.sekorm.cache.ecm.util.RedisThreadPool;
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.dao.IndustryWordMapper;
+import com.sekorm.core.model.IndustryWord;
+
+/**
+ * 
+ *行业词库service
+ *
+ * @author henley_lin
+ * @date 2017年5月2日
+ */
+@Service
+public class IndustryWordService {
+	
+	private DataType dataType;
+	
+	@Value("${data.env}")
+    private String env;
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Autowired
+	private SekAnalyzerService sekAnalyzerService;
+	
+	@Autowired
+    private IndustryWordMapper industryWordMapper;
+	
+	private static Logger logger = LoggerFactory.getLogger(IndustryWordService.class);
+	
+	
+	/**
+	 * @describe 通过类型、名称集合 返回 指定类名称集合 （验证是否存在）
+	 *
+	 * @author henley_lin
+	 * @date   2017年5月2日
+	 * @param type  类型： 1:厂牌 2:商品分类 3:市场应用 4:PN 5:产品线
+	 * @param industryWords  名称
+	 * @return 
+	 */
+	public List<String> getIndustryWordList(Integer type, List<String> industryWords){
+		if(type == null || industryWords == null){
+			return null;
+		}
+		return industryWordMapper.getIndustryWordList(type, industryWords);
+	}
+	
+	public DataType getDataType() {
+		if(dataType == null){
+			if("beta".equals(env)){
+				dataType = DataType.BETA_SEARCH;
+			}else{
+				dataType = DataType.SEARCH;
+			}
+		}
+		return dataType;
+	}
+
+}

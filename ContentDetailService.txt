@@ -1,0 +1,59 @@
+package com.sekorm.core.service;
+
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.dao.ContentDetailMapper;
+
+
+@Service
+public class ContentDetailService {
+
+	@Autowired
+	private ContentDetailMapper contentDetailMapper;
+	
+	
+	/**
+	 * @describe   
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月15日
+	 * @param
+	 * @return 
+	 */
+	public  List<Map<String, Object>> getWeightRuleList(Integer ruleCode){
+		return contentDetailMapper.getWeightRuleList(ruleCode);
+	}
+	
+	/**
+	 * @describe
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月17日
+	 * @param
+	 * @return 
+	 */
+	public  List<Map<String, Object>> getSplitRuleList(Integer ruleCode){
+		return contentDetailMapper.getSplitRuleList(ruleCode);
+	}
+	
+	/**
+	 * @describe
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月21日
+	 * @param
+	 * @return 
+	 */
+	public List<Map<String, Object>> getSceneConfigList(){
+		return contentDetailMapper.getSceneConfigList();		
+	}
+	
+	
+
+	
+	
+}

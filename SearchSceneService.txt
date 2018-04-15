@@ -1,0 +1,238 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.service.analyzer.Matchs;
+import com.sekorm.core.util.CommonUtil;
+import com.sekorm.core.vo.SearchParam;
+import com.sekorm.core.vo.SearchRule;
+import com.sekorm.core.vo.SearchVO;
+import com.sekorm.dubbo.ecm.beans.isearch.TestSearchDI;
+
+/**
+ * @discription  搜索场景Service
+ * @author bowen_bao
+ */
+@Service
+public class SearchSceneService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Autowired
+	private SekAnalyzerService sekAnalyzerService;
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Autowired
+	private CommonUtil commonUtil;
+	
+	
+	@Autowired
+	private EcDataService ecDataService;
+	
+	
+	public SearchRule getSearchRule(SearchParam searchDI,SearchVO searchVO) {
+		
+		
+		Integer sceneCode=0;
+		
+		List<Matchs> matchsList=new ArrayList<Matchs>();
+		Matchs matchs;
+		//SEM 场景判断       1:竞品厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+		if( ecCacheService.getSemBrandSet().contains(searchDI.getQ())) {// SEM厂牌 =系统厂牌场景
+			sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+		}else if(ecCacheService.getSemGoodSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_GOODS_CODE;
+		}else if(ecCacheService.getSemELECSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_ELEC_CODE;
+		}else if(ecCacheService.getSemPNSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_PNPLS_CODE;
+		}
+		
+		if(sceneCode==0) {
+			List<Matchs> list= sekAnalyzerService.getSekScene(searchDI.getQ());
+			System.out.println("**********list="+list.size());
+			Set<Integer> unitTypeSet=new HashSet<Integer>();
+			for(Matchs m:list) {
+				matchs =new Matchs();
+				matchs.setUnitType(m.getUnitType());
+				matchs.setFinalString(m.getFinalString());
+				System.out.println("*****"+m.getUnitType()+"*******"+m.getFinalString());
+				if(1==m.getUnitType()) {
+					//扩展同义词 
+					String extendQ=ecCacheService.getBrandNameByAlia(m.getFinalString());
+					if(StringUtils.isNotEmpty(extendQ)){
+						extendQ=extendQ.toLowerCase();
+						logger.info("extendQ()==========="+m.getFinalString()+"======"+extendQ);
+						if(StringUtils.isEmpty(searchVO.getSceneWord())) {
+							searchVO.setSceneWord(extendQ);
+						}
+						searchDI.setQ(searchDI.getQ().replaceAll(m.getFinalString().toLowerCase(), extendQ.toLowerCase()));//用户搜别名，直接带厂牌名去搜索
+						logger.info("q========== "+searchDI.getQ());
+						matchs.setFinalString(extendQ);
+					}else {
+						if(StringUtils.isEmpty(searchVO.getSceneWord())) {
+							searchVO.setSceneWord(m.getFinalString());
+						}
+					} 
+				}
+				unitTypeSet.add(m.getUnitType());
+				matchsList.add(matchs);
+			}
+			searchDI.setMatchsList(matchsList);
+			if(list!=null) {
+				if(unitTypeSet.size()==1) {
+					if(1==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+					}else if(2==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}else if(3==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_ELEC_CODE;
+					}
+				}else if(unitTypeSet.size()==2) {
+					
+					boolean brandBl=false;
+					boolean goodsBl=false;
+					boolean elecBl=false;
+					if(unitTypeSet.contains(1)) {
+						brandBl=true;
+					}
+					if(unitTypeSet.contains(2)) {
+						goodsBl=true;
+					}
+					if(unitTypeSet.contains(3)) {
+						elecBl=true;
+					}
+					if(brandBl && goodsBl ) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}
+					if(brandBl && elecBl) {
+						sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+					}
+					if(goodsBl && elecBl) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}
+				}
+			} 
+		}
+		
+		if(sceneCode==0) {
+			if(commonUtil.isContainChinese(searchDI.getQ())) {//如果q含有中文,走普通场景
+					sceneCode=SearchCoreConstant.SCENE_SEARCH_CODE;
+			}else if(searchDI.getQ().length()>=SearchCoreConstant.PN_LONG_SIZE){//如果q不含中文,走pn 场景
+				List<String> list=ecDataService.getPnExpandWord(searchDI.getQ());
+				if(list!=null  &&  list.size()>0) {
+					sceneCode=SearchCoreConstant.SCENE_PNPLS_CODE;
+					searchDI.setPnExpandWordList(list);
+				}
+			}
+		}
+		
+		if(sceneCode==0) {
+			sceneCode=SearchCoreConstant.SCENE_SEARCH_CODE;
+		}
+		return ecCacheService.getSearchRuleBySceneCode(sceneCode);
+	}
+	
+	
+	
+	
+	
+//下面的方法只用于测试	
+public SearchRule getSearchRule(TestSearchDI searchDI,SearchVO searchVO) {
+		
+		
+		Integer sceneCode=0;
+		 
+		//SEM 场景判断       1:竞品厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+		if( ecCacheService.getSemBrandSet().contains(searchDI.getQ())) {// SEM厂牌 =系统厂牌场景
+			sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+		}else if(ecCacheService.getSemGoodSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_GOODS_CODE;
+		}else if(ecCacheService.getSemELECSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_ELEC_CODE;
+		}else if(ecCacheService.getSemPNSet().contains(searchDI.getQ())) {
+			sceneCode=SearchCoreConstant.SCENE_SEM_PNPLS_CODE;
+		}
+		
+		if(sceneCode==0) {
+			List<Matchs> list= sekAnalyzerService.getSekScene(searchDI.getQ());
+			System.out.println("**********list="+list.size());
+			Set<Integer> unitTypeSet=new HashSet<Integer>();
+			for(Matchs m:list) {
+				System.out.println("*****"+m.getUnitType()+"*******"+m.getFinalString());
+				unitTypeSet.add(m.getUnitType());
+			}
+			if(list!=null) {
+				if(unitTypeSet.size()==1) {
+					if(1==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+					}else if(2==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}else if(3==list.get(0).getUnitType()) {
+						sceneCode=SearchCoreConstant.SCENE_ELEC_CODE;
+					}
+				}else if(unitTypeSet.size()==2) {
+					
+					boolean brandBl=false;
+					boolean goodsBl=false;
+					boolean elecBl=false;
+					if(unitTypeSet.contains(1)) {
+						brandBl=true;
+					}
+					if(unitTypeSet.contains(2)) {
+						goodsBl=true;
+					}
+					if(unitTypeSet.contains(3)) {
+						elecBl=true;
+					}
+					if(brandBl && goodsBl ) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}
+					if(brandBl && elecBl) {
+						sceneCode=SearchCoreConstant.SCENE_BRAND_CODE;
+					}
+					if(goodsBl && elecBl) {
+						sceneCode=SearchCoreConstant.SCENE_GOODS_CODE;
+					}
+				}
+			} 
+		}
+		
+		if(sceneCode==0) {
+			if(commonUtil.isContainChinese(searchDI.getQ())) {//如果q含有中文,走普通场景
+					sceneCode=SearchCoreConstant.SCENE_SEARCH_CODE;
+			}else if(searchDI.getQ().length()>=SearchCoreConstant.PN_LONG_SIZE){//如果q不含中文,走pn 场景
+				List<String> list=ecDataService.getPnExpandWord(searchDI.getQ());
+				if(list!=null  &&  list.size()>0) {
+					sceneCode=SearchCoreConstant.SCENE_PNPLS_CODE;
+				}
+			}
+		}
+		
+		if(sceneCode==0) {
+			sceneCode=SearchCoreConstant.SCENE_SEARCH_CODE;
+		}
+		return ecCacheService.getSearchRuleBySceneCode(sceneCode);
+	}
+	
+	
+	
+	
+	
+	
+	
+}

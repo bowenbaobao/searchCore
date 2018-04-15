@@ -1,0 +1,318 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.commons.collections.CollectionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.sekorm.common.exception.BusinessException;
+import com.sekorm.common.util.StringUtils;
+import com.sekorm.common.util.WebUtils;
+import com.sekorm.core.common.AssoWordType;
+import com.sekorm.core.dao.AssociationWordMapper;
+import com.sekorm.core.dao.KeywordMapper;
+import com.sekorm.core.model.AssociationWord;
+
+/**
+ * 
+ * 搜索联想词service
+ *
+ * @author cheney_zhang
+ * @date 2017年3月22日
+ */
+@Service
+public class AssociationWordService {
+	
+	private static final Logger log = LoggerFactory.getLogger(AssociationWordService.class);
+	
+	@Autowired
+	private AssociationWordMapper associationWordMapper;
+	
+	@Autowired
+	private EcDataService ecDataService;
+	
+	@Autowired
+	private KeywordMapper keywordMapper;
+	
+	/**
+	 * 
+	 * 更新搜索联想词
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月22日
+	 * @param 
+	 * @return
+	 */
+	public void updateAssociationWord() {
+		
+		log.info("更新搜索联想词开始...");
+		
+		// 获取源数据
+		log.info("获取源数据");
+		List<String> brandList = ecDataService.getAllTopBrand();
+		List<String> goodsList = ecDataService.getAllGoods();
+		List<String> elecList = ecDataService.getAllElec();
+		List<String> pnList = ecDataService.getAllPnPlS();
+		List<String> keywordList = getAllEcnewEcdocKeyword();
+		
+		if (CollectionUtils.isEmpty(brandList) || CollectionUtils.isEmpty(goodsList)
+				|| CollectionUtils.isEmpty(elecList) || CollectionUtils.isEmpty(pnList)
+				|| CollectionUtils.isEmpty(keywordList)) {
+			throw new BusinessException("获取源数据异常");
+		}
+		
+		// 源数据的集合
+		log.info("封装数据");
+		List<String> newList = new ArrayList<String>();
+		newList.addAll(brandList);
+		newList.addAll(goodsList);
+		newList.addAll(elecList);
+		newList.addAll(pnList);
+		newList.addAll(keywordList);
+		
+		// 设置源数据类型
+		// 厂牌/商品/市场/资讯资料关键词, 点击次数初始化为1, pn点击次数初始化为0
+		List<AssociationWord> originList = new ArrayList<AssociationWord>();
+		AssociationWord word;
+		for (String brand : brandList) {
+			word = new AssociationWord();
+			word.setKeyword(brand);
+			word.setType(AssoWordType.BRAND.getCode());
+			word.setHits(1);
+			originList.add(word);
+		}
+		for (String goods : goodsList) {
+			word = new AssociationWord();
+			word.setKeyword(goods);
+			word.setType(AssoWordType.GOODS.getCode());
+			word.setHits(1);
+			originList.add(word);
+		}
+		for (String elec : elecList) {
+			word = new AssociationWord();
+			word.setKeyword(elec);
+			word.setType(AssoWordType.ELEC.getCode());
+			word.setHits(1);
+			originList.add(word);
+		}
+		for (String pn : pnList) {
+			word = new AssociationWord();
+			word.setKeyword(pn);
+			word.setType(AssoWordType.PN.getCode());
+			word.setHits(0);
+			originList.add(word);
+		}
+		for (String keyword : keywordList) {
+			word = new AssociationWord();
+			word.setKeyword(keyword);
+			word.setType(AssoWordType.ECDATAKEYWORD.getCode());
+			word.setHits(1);
+			originList.add(word);
+		}
+		
+		// 查询旧的记录
+		log.info("查询旧的记录");
+		AssociationWord record = new AssociationWord();
+		List<AssociationWord> oldList = associationWordMapper.selectBySelective(record);
+		
+		List<Integer> enableIdList = new ArrayList<Integer>();
+		List<Integer> disableIdList = new ArrayList<Integer>();
+		
+		log.info("获取需要更新状态的记录");
+		setUpdateIdList(newList, oldList, enableIdList, disableIdList);
+		
+		// 执行插入数据或更新状态
+		log.info("操作数据库");
+		insertOrUpdate(originList, enableIdList, disableIdList);
+		
+		log.info("更新搜索联想词结束...");
+	}
+	
+	private final static int BATCH_SIZE = 5000;
+	/**
+	 * 
+	 * 插入不存在的记录, 同时更新需要生效的记录
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月23日
+	 * @param originList 源数据
+	 * @param updateIdList 需要生效的记录id
+	 * @return
+	 */
+	@Transactional
+	public void insertOrUpdate(List<AssociationWord> originList, List<Integer> enableIdList, List<Integer> disableIdList) {
+		// 根据keyword插入不存在的记录
+		long start = System.currentTimeMillis();
+		int row = 0;
+		// 分批次执行, 以5000条为一个批次
+		int turn = originList.size() % BATCH_SIZE == 0 ? 
+				originList.size()/BATCH_SIZE : originList.size()/BATCH_SIZE + 1;// 总共执行的次数
+		for (int i = 0; i < turn; i++) {
+			int fromIndex = i * BATCH_SIZE;// 开始的索引
+			int toIndex = i+1 < turn ? (i+1) * BATCH_SIZE : originList.size();// 结束的索引
+			row += associationWordMapper.insertIgnoreKeyword(originList.subList(fromIndex, toIndex));
+		}
+		log.info("新增记录, 受影响的行: {}, 执行时间: {}ms", row, System.currentTimeMillis() - start);
+		
+		Date updateTime = new Date();
+		if (CollectionUtils.isNotEmpty(enableIdList)) {
+			row = associationWordMapper.updateStatus(enableIdList, STATUS_YES, updateTime);
+			log.info("更新状态为生效, 受影响的行: {}", row);
+		}
+		if (CollectionUtils.isNotEmpty(disableIdList)) {
+			row = associationWordMapper.updateStatus(disableIdList, STATUS_NO, updateTime);
+			log.info("更新状态为失效, 受影响的行: {}", row);
+		}
+	}
+	
+	/**
+	 * 
+	 * 获取需要更新状态的记录id
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月23日
+	 * @param originList 源数据
+	 * @param oldList 从数据库查询的记录
+	 * @return 
+	 */
+	private void setUpdateIdList(List<String> newList, List<AssociationWord> oldList, 
+			List<Integer> enableIdList, List<Integer> disableIdList) {
+		if (CollectionUtils.isEmpty(newList) || CollectionUtils.isEmpty(oldList)) {
+			return;
+		}
+		
+		for (AssociationWord old : oldList) {
+			// 数据库为失效, 但是源数据包含这个关键词, 则需生效
+			if (old.getStatus() == STATUS_NO && newList.contains(old.getKeyword())) {
+				enableIdList.add(old.getId());
+				continue;
+			}
+			// 数据库为生效, 但是源数据不包含这个关键词, 则需失效
+			if (old.getStatus() == STATUS_YES && !newList.contains(old.getKeyword())) {
+				disableIdList.add(old.getId());
+				continue;
+			}
+		}
+		
+	}
+	
+	/**
+	 * 
+	 * 获取所有资讯资料关键词
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月29日
+	 * @param 
+	 * @return
+	 */
+	private List<String> getAllEcnewEcdocKeyword() {
+		log.info("获取所有关键词开始...");
+		List<String> list = keywordMapper.getAllEcnewEcdocKeyword();
+		if (CollectionUtils.isEmpty(list)) {
+			return null;
+		}
+		List<String> lowerCaseList = new ArrayList<String>();
+		for (String keyword : list) {
+			if (StringUtils.isNotBlank(keyword)) {
+				lowerCaseList.add(keyword.toLowerCase());
+			}
+		}
+		log.info("获取所有关键词结束(共{}条记录)...", lowerCaseList.size());
+		return removeRepeat(lowerCaseList);
+	}
+	
+	/*
+	 * 去重
+	 */
+	private List<String> removeRepeat(List<String> list) {
+		if (CollectionUtils.isEmpty(list)) {
+			return list;
+		}
+		log.info("去重之前记录数: {}", list.size());
+		Set<String> set = new HashSet<String>();
+		set.addAll(list);
+		List<String> returnList = new ArrayList<String>(set);
+		log.info("去重之后记录数: {}", returnList.size());
+		return returnList;
+	}
+	
+	private static final int STATUS_YES = 0;
+	private static final int STATUS_NO = 1;
+
+	/**
+	 * 
+	 * 模糊查询, 左右匹配
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月24日
+	 * @param keyword 关键词
+	 * @param limit 查询条数
+	 * @return
+	 */
+	public List<String> fuzzyQuery(String keyword, Integer limit) {
+		if (StringUtils.isBlank(keyword) || limit == null) {
+			return new ArrayList<String>();
+		}
+    	// 替换敏感符号
+    	keyword = WebUtils.xssEncode(keyword.trim().replaceAll("\\s+", " ").replaceAll("%", ""));
+    	keyword = keyword.replace("_", "\\_");// 支持模糊匹配下划线
+    	// 全体匹配
+    	List<String> resultList = executeFuzzyQuery(keyword, limit);
+    	// 全体匹配不到的情况下, 最后一个单词进行匹配
+    	if (CollectionUtils.isEmpty(resultList) && keyword.contains(" ")) {
+    		String[] keywordArr = keyword.split(" ");
+    		resultList = executeFuzzyQuery(keywordArr[keywordArr.length - 1], limit);
+    		resultList = prependResultList(resultList, keyword.substring(0, keyword.lastIndexOf(" ")));
+    	}
+    	return resultList;
+	}
+	
+	/*
+	 * 实际执行模糊查询的方法
+	 */
+	private List<String> executeFuzzyQuery(String keyword, Integer count) {
+		return associationWordMapper.fuzzyQuery(keyword.toLowerCase(), count);
+	}
+
+	/*
+	 * 当对最后一个单词进行匹配, 需要把关键词添加到结果前面
+	 */
+	private List<String> prependResultList(List<String> resultList, String keyword) {
+		List<String> newResultList = new ArrayList<String>();
+		if (CollectionUtils.isNotEmpty(resultList)) {
+			for (String result : resultList) {
+				newResultList.add(keyword + " " + result);
+			}
+			resultList = newResultList;
+		}
+		return newResultList;
+	}
+    
+	/**
+	 * 
+	 * 增加一次用户点击量
+	 *
+	 * @author cheney_zhang
+	 * @date 2017年3月24日
+	 * @param keyword 关键词
+	 * @return
+	 */
+	public int addUserHits(String keyword) {
+		int affectRow = 0;
+		if (StringUtils.isBlank(keyword)) {
+			return affectRow;
+		}
+		affectRow = associationWordMapper.addHitsByKeyword(keyword.trim().toLowerCase());
+		log.debug("受影响的行: {}", affectRow);
+		return affectRow;
+	}
+
+}

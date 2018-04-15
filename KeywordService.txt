@@ -1,0 +1,43 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.common.util.StringUtils;
+import com.sekorm.core.dao.KeywordMapper;
+import com.sekorm.core.vo.KeywordVO;
+
+/**
+ * 
+ * 资讯关键字Service 
+ *
+ * @author cheney_zhang
+ * @date 2017年3月3日
+ */
+@Service
+public class KeywordService {
+	
+	
+    @Autowired
+    private KeywordMapper keywordMapper;
+
+    /**
+     * @param keywordstr 模糊匹配词
+     * @param nCount     返回的条数
+     * @return
+     * @describe 模糊匹配关键字  （数据库like方式）
+     * @author bowen_bao
+     * @date 2015年5月15日
+     */
+    public List<KeywordVO> fuzzyQueryKeyword(String keywordstr, Integer nCount) {
+    	if (StringUtils.isBlank(keywordstr) || nCount == null) {
+			return new ArrayList<KeywordVO>();
+		}
+    	keywordstr = keywordstr.replaceAll("%", "");
+        return keywordMapper.fuzzyQueryKeyword(keywordstr, nCount);
+    }
+
+}

@@ -1,0 +1,50 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.service.analyzer.Dictionary;
+import com.sekorm.core.service.analyzer.Matchs;
+import com.sekorm.core.service.analyzer.Tokenizer;
+
+/**
+ * 世强场景分词
+ * @author bowen_bao
+ *
+ */
+@Service
+public class SekAnalyzerService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	/**
+	 * 世强场景分词，添加业务词当词元
+	 * @param list
+	 * @param type:   1:厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+	 */
+	public void addSekWord(Set<String> set,Integer type) {
+		Dictionary.getSingleton().fillDictionary(set, type);
+	}
+	
+	/**
+	 * @description:  清空系统的词元
+	 */
+	public void cleanSekWord() {
+		Dictionary.clear();
+	}
+	
+	/**
+	 * 判断一个搜索词，返回一个业务场景
+	 * @param keyword
+	 * @return
+	 */
+	public List<Matchs> getSekScene(String keyword) {
+		return   Tokenizer.doRecongrizer(keyword);
+	}
+	
+	
+}

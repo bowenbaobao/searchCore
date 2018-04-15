@@ -1,0 +1,172 @@
+package com.sekorm.core.service;
+
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.sekorm.common.beans.Page;
+import com.sekorm.core.dao.SceneConfigMapper;
+import com.sekorm.core.dao.WeightRelationMapper;
+import com.sekorm.core.dao.WeightRuleMapper;
+import com.sekorm.core.model.SceneConfig;
+import com.sekorm.core.model.WeightRelation;
+import com.sekorm.core.model.WeightRule;
+
+
+@Service
+public class WeightRuleService {
+
+	@Autowired
+	private WeightRuleMapper weightRuleMapper;
+	
+	@Autowired
+	private WeightRelationMapper weightRelationMapper;
+	
+	@Autowired
+	private SceneConfigMapper sceneConfigMapper;
+	
+	public WeightRule selectByPrimaryKey(Integer id){
+		return weightRuleMapper.selectByPrimaryKey(id);
+	}
+			
+	/**
+	 * @describe  根据权重名称查找
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public WeightRule getWeightRuleByName(String name){
+		return weightRuleMapper.getWeightRuleByName(name);
+	}
+		
+		
+	/**
+	 * @describe 所有权重规则
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月13日
+	 * @param
+	 * @return 
+	 */
+	public  Page<Map<String, Object>> getWeightRuleList(Page<Map<String, Object>> page){
+		return weightRuleMapper.getWeightRuleList(page);	 
+	}
+	
+	/**
+	 * @describe 删除权重信息
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月16日
+	 * @param
+	 * @return 
+	 */
+	@Transactional
+	public int deleteWeightRule(Integer id){
+					
+		WeightRule weightRule =weightRuleMapper.selectByPrimaryKey(id);
+		
+		SceneConfig sceneConfig = new SceneConfig();
+		sceneConfig.setWeightruleCode(weightRule.getRuleCode());
+		List<SceneConfig> list = sceneConfigMapper.getSceneConfigListbyCode(sceneConfig);		 //先判断是否被配置
+		if(list ==null || list.size()<=0){
+			if(weightRule != null){
+				weightRelationMapper.deleteByRuleCode(weightRule.getRuleCode());
+				return weightRuleMapper.deleteByPrimaryKey(id);
+			}
+		}
+		
+		return 0;
+		
+	}
+	
+	/**
+	 * @describe 通过最大ruleCode,生成新ruleCode
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月17日
+	 * @param
+	 * @return 
+	 */
+	public int getMaxRuleCode(){
+		return weightRuleMapper.getMaxRuleCode();					
+	}
+	
+	/**
+	 * @describe  保存
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月17日
+	 * @param arrAttributeCode  属性数组
+	 * @param arrBoost 权重数组
+	 * @return 
+	 */
+	@Transactional
+	public int insertWeightRuleInfo(WeightRule record,String[] arrAttributeCode,Float[] arrBoost){
+		int len =0;		
+					
+		record.setRuleCode(this.getMaxRuleCode());  
+		
+		len = weightRuleMapper.insertSelective(record);
+		this.insertWeightRule(record, arrAttributeCode, arrBoost);  			  
+	    
+	    return len;
+	    
+	}
+	
+	/**
+	 * @describe  修改
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月17日
+	 * @param arrAttributeCode  属性数组
+	 * @param arrBoost 权重数组
+	 * @return 
+	 */
+	@Transactional
+	public int updateWeightRuleInfo(WeightRule record,String[] arrAttributeCode,Float[] arrBoost){
+		
+		WeightRule weightRule =weightRuleMapper.selectByPrimaryKey(record.getId());
+		record.setRuleCode(weightRule.getRuleCode());
+		
+		/* 关联表操作先删除再插入 */
+		weightRelationMapper.deleteByRuleCode(weightRule.getRuleCode());
+		record.setCreator(record.getUpdator());
+		this.insertWeightRule(record, arrAttributeCode, arrBoost);
+        
+		return weightRuleMapper.updateByPrimaryKeySelective(record);
+	}
+	
+	
+	/**
+	 * @describe  权重关系 插入
+	 *
+	 * @author henley_lin
+	 * @date   2017年2月17日
+	 * @param arrAttributeCode  属性数组
+	 * @param arrBoost 权重数组
+	 * @return 
+	 */
+	private int insertWeightRule(WeightRule record,String[] arrAttributeCode,Float[] arrBoost){
+		int len=0;
+		for(int i=0;i<arrAttributeCode.length;i++){
+	    	 WeightRelation  weightRelation = new WeightRelation();
+	    	 weightRelation.setAttributeCode(Integer.parseInt(arrAttributeCode[i]));
+	    	 weightRelation.setBoost(arrBoost[i]);
+	    	 weightRelation.setRuleCode(record.getRuleCode());
+	    	 weightRelation.setCreator(record.getCreator());
+	    			 
+	    	 len +=weightRelationMapper.insertSelective(weightRelation);
+	    }	 
+		return len;
+	}
+	
+	
+	
+		
+	
+}

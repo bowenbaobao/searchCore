@@ -1,0 +1,78 @@
+package com.sekorm.core.service;
+
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.dao.SyncDataMapper;
+
+/**
+ * @describe 公测生产数据同步类
+ * @author hawii_lai
+ * @date 2017年7月20日
+ */
+@Service
+public class SyncDataService {
+	
+	@Value("${data.env}")
+    private String env;
+	
+	@Autowired
+	SyncDataMapper syncDataMapper;
+	
+	
+	/**
+	 * @describe 数据同步
+	 * @author hawii_lai
+	 * @date 2017年7月20日
+	 */
+	@Transactional(rollbackFor=Exception.class)
+	public Integer syncData() throws Exception{
+		syncDataMapper.deleteScene();
+		
+		syncDataMapper.deleteSceneConfig();
+		
+		syncDataMapper.deleteContentDetail();
+		
+		syncDataMapper.deleteAttributeFilter();
+		
+		syncDataMapper.deleteAttributeWeight();
+		
+		syncDataMapper.deleteIndexSplitRelation();
+		
+		syncDataMapper.deleteSplitAnalyzer();
+		
+		syncDataMapper.deleteSplitRelation();
+		
+		syncDataMapper.deleteSplitRule();
+		
+		syncDataMapper.deleteWeightRelation();
+		
+		syncDataMapper.deleteWeightRule();
+		
+		syncDataMapper.insertScene(env);
+		
+		syncDataMapper.insertSceneConfig(env);
+		
+		syncDataMapper.insertContentDetail(env);
+		
+		syncDataMapper.insertAttributeFilter(env);
+		
+		syncDataMapper.insertAttributeWeight(env);
+		
+		syncDataMapper.insertIndexSplitRelation(env);
+		
+		syncDataMapper.insertSplitAnalyzer(env);
+		
+		syncDataMapper.insertSplitRelation(env);
+		
+		syncDataMapper.insertSplitRule(env);
+		
+		syncDataMapper.insertWeightRelation(env);
+		
+		syncDataMapper.insertWeightRule(env);
+		
+		return 0;
+	}
+}

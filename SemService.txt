@@ -1,0 +1,104 @@
+package com.sekorm.core.service;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.commons.collections.CollectionUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import com.sekorm.core.dao.SemWordMapper;
+import com.sekorm.core.model.SemWord;
+
+
+/**
+ * @description:SEM 服务类
+ * @author bowen_bao
+ *
+ */
+@Service
+public class SemService {
+	
+	@Autowired
+	private SemWordMapper semWordMapper;
+	
+	/**
+	 * 
+	 * @Description Excel导入
+	 * @author hawii_lai
+	 * @date 2017年11月2日 下午4:24:53 
+	 * @param @param list
+	 * @param @param userId
+	 * @return Map<String,Object>
+	 */
+	public Map<String, Object> importDataIntoBD(List<Map<Integer, String>> list) {
+		
+		Map<String,Object> retMap = new HashMap<String,Object>();//返回结果
+		//检查表头是否正确
+		if(CollectionUtils.isEmpty(list) || list.size() < 2){
+			retMap.put("status", -1);
+			retMap.put("message", "没有任何数据导入");
+			return retMap;
+		}
+		String word = null;
+		String type = null;
+		SemWord semWord = null;
+		Integer dataType = null;
+		List<SemWord> collect = new ArrayList<SemWord>();
+		Date createTime = new Date();
+		int nLine = 0;
+		for(int i = 1;i < list.size();i++){
+			nLine = i+1;
+			try {
+				word = list.get(i).get(0).trim();//sem关键词
+				type = list.get(i).get(1).trim();//关键词类型
+			} catch (Exception e) {
+				retMap.put("status", -1);
+				retMap.put("message", "导入数据不正确,[表格导入的数据不能为空" + nLine + "行]");
+				return retMap;
+			}
+			if(word.length() > 128  || word.length() == 0) {
+				retMap.put("status", -1);
+				retMap.put("message", "导入数据不正确,[表格导入的关键词长度范围1~128,第" + nLine + "行]");
+				return retMap;
+			}
+			word = word.toLowerCase();
+			if("竞品厂牌".equals(type)) {
+				dataType = 1;
+			}else if("产品".equals(type)) {
+				dataType = 2;
+			}else if("应用".equals(type)) {
+				dataType = 3;
+			}else if("型号".equals(type)) {
+				dataType = 4;
+			}else {
+				retMap.put("status", -1);
+				retMap.put("message", "导入数据不正确,[表格导入的类别无法识别,第" + nLine + "行]");
+				return retMap;
+			}
+			semWord = new SemWord();
+			semWord.setSemWord(word);
+			semWord.setDataType(dataType);
+			semWord.setCreateTime(createTime);
+			collect.add(semWord);
+			
+			
+			
+		}
+	
+		int count = 0;
+		int importTotal = 0;
+		for(SemWord sw :collect) {
+			count = semWordMapper.getCountBySelect(sw);
+			if(count == 0) {
+				semWordMapper.insert(sw);
+				importTotal++;
+			}
+		}
+		int repeat = collect.size()-importTotal;
+		retMap.put("status", 0);
+		retMap.put("message", "文件导入成功(成功导入"+importTotal+"条，重复"+repeat+"条)");
+		return retMap;
+	}
+}

@@ -1,0 +1,40 @@
+package com.sekorm.core.service;
+
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.sekorm.core.dao.EcDataMapper;
+
+
+/**
+ * 世强的扩词系统
+ * @author bowen_bao
+ *
+ */
+@Service
+public class SekExpandWordService {
+	
+	@Autowired
+	private EcDataMapper ecDataMapper;
+
+	/**
+	 * PN 扩词
+	 * @param keyword
+	 * @return
+	 */
+	public List<String> getPnExpandWord(String keyword){
+		return ecDataMapper.getPnExpandWord(keyword);
+	}
+	
+	/**
+	 * 厂牌扩词
+	 * @param keyword
+	 * @return
+	 */
+	public List<String> getBrandExpandWord(String keyword){
+		return null;
+	}
+	
+}

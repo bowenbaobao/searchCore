@@ -1,0 +1,2183 @@
+package com.sekorm.core.service;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.queries.BooleanFilter;
+import org.apache.lucene.queries.TermFilter;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.Explanation;
+import org.apache.lucene.search.FieldDoc;
+import org.apache.lucene.search.Filter;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.NumericRangeQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.Sort;
+import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.grouping.GroupDocs;
+import org.apache.lucene.search.grouping.GroupingSearch;
+import org.apache.lucene.search.grouping.TopGroups;
+import org.apache.lucene.util.BytesRef;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.model.EcData;
+import com.sekorm.core.model.SekQuery;
+import com.sekorm.core.service.analyzer.Matchs;
+import com.sekorm.core.util.CommonUtil;
+import com.sekorm.core.util.HightLight;
+import com.sekorm.core.util.QueryUtil;
+import com.sekorm.core.util.SortUtil;
+import com.sekorm.core.vo.IndexRule;
+import com.sekorm.core.vo.SearchEcAgoBean;
+import com.sekorm.core.vo.SearchEcAgoVO;
+import com.sekorm.core.vo.SearchEcObjVO;
+import com.sekorm.core.vo.SearchParam;
+import com.sekorm.core.vo.SearchRule;
+import com.sekorm.core.vo.SearchVO;
+import com.sekorm.dubbo.ecm.beans.isearch.ONEcDocVO;
+import com.sekorm.dubbo.ecm.beans.isearch.TestSearchDI;
+import com.sekorm.dubbo.ecm.beans.isearch.TestSearchEcObjVO;
+import com.sekorm.dubbo.ecm.beans.isearch.TestSearchVO;
+
+
+/**
+ * 
+ * @describe 搜索业务服务类(总入口)
+ *
+ * @author bowen_bao
+ * @date 2017年1月18日
+ */
+@Service
+public class SearchService {
+	
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	
+	@Value("${file_url}")
+	private String file_url;
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Autowired
+	private SearchSceneService searchSceneService;
+	
+	@Autowired
+	private EcDataService ecDataService;
+	
+	
+	@Autowired
+	private AnalyzerService analyzerService;
+	
+	@Autowired
+	private SekAnalyzerService sekAnalyzerService;
+	
+	@Autowired
+	private IndexService indexService;
+	
+	@Autowired
+	private QueryUtil queryUtil;
+	
+	@Autowired
+	private CommonUtil commonUtil;
+	
+	@Autowired
+	private SortUtil sortUtil;
+	
+	@Autowired
+	private HightLight hightLight;
+	
+	
+	/**
+	 * 
+	 * @describe  search V4
+	 *
+	 * @author bowen_bao
+	 * @date 2017年3月6日
+	 * @param
+	 * @return
+	 */
+	public SearchVO search(SearchParam searchDI){
+		
+		if(searchDI==null || StringUtils.isEmpty(searchDI.getQ())){
+			return null;
+		}
+		initSearchDI(searchDI);//完善搜索参数
+		SearchVO searchVO=new SearchVO();
+		List<String> subTypeList=new ArrayList<String>();
+		List<SearchEcObjVO> list=null;
+//		searchVO.setSceneWord(searchDI.getQ().toLowerCase());//由于搜索系统需要扩词,需要保留原词给前台做场景词判断
+		searchDI.setQ(searchDI.getQ().toLowerCase());//转小写
+		//根据q获取搜索的场景
+		SearchRule sceneRule=searchSceneService.getSearchRule(searchDI,searchVO);
+		searchVO.setSceneCode(sceneRule.getSceneCode());
+		logger.info("SceneCode()==========="+sceneRule.getSceneCode()+"|"+"q==========="+searchDI.getQ());
+		
+//		//扩展同义词 
+//		String extendQ=ecCacheService.getBrandNameByAlia(searchDI.getQ());
+//		if(StringUtils.isNotEmpty(extendQ)){
+//			logger.info("extendQ()==========="+searchDI.getQ()+"======"+extendQ);
+//			searchDI.setQ(extendQ);//用户搜别名，直接带厂牌名去搜索
+//		}
+				
+//		if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())){//厂牌场景
+//			
+//			//只有厂牌场景， 传一个系统分词之后的厂牌给前台
+////			List<Matchs> listMatchs= sekAnalyzerService.getSekScene(searchDI.getQ());
+////			if(listMatchs!=null && listMatchs.size()>0){
+////				searchVO.setSceneWord(listMatchs.get(0).getFinalString());
+////			}
+//			
+//			//只有在厂牌有空格的时候，扩展空格 -     后面有处理  
+////			if(searchDI.getQ().contains(" ")){
+////				searchDI.setQ(searchDI.getQ()+","+searchDI.getQ().replace(" ", "-"));
+////			}
+//		}
+		
+		
+		
+		//根据场景
+		SekQuery sekQuery=searchBySearchRule(sceneRule,searchDI);
+		logger.info(sekQuery.toString());
+		Sort sort=new Sort();
+		SortField[] sortFields= sortUtil.getEcSort();
+		sort.setSort(sortFields);
+		
+		
+		try {
+			TopDocs topdocs=indexService.getIndexSearcher().search(sekQuery.getQuery(),sekQuery.getFilter(), searchDI.getDataNum()+searchDI.getDataOffset(),sort);
+			
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				list=new ArrayList<SearchEcObjVO>();
+				for(int i=searchDI.getDataNum();i<(searchDI.getDataNum()+searchDI.getDataOffset()>totalCount?totalCount:searchDI.getDataNum()+searchDI.getDataOffset());i++){
+					//带有sort排序，获取文档分组的情况
+					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							searchDI.getImgFlag(),searchDI.getSearchFlag(),(Float)((FieldDoc)scoreDoc[i]).fields[0],""));//只获取总文档分值
+				}
+				
+				hightLight.sekormhigh(list,searchDI.getQ()+","+searchVO.getSceneWord(),searchDI.getSearchFlag(),analyzerService.getIKAnalyzer(true));
+				searchVO.setSubTypeList(subTypeList);
+				searchVO.setListEc(list);
+				searchVO.setTotalCount(totalCount);
+		} catch (Exception e) {
+			logger.error("SearchService.search error:"+e.getMessage());
+		}
+		logger.info("searchVO.getSceneWord()="+searchVO.getSceneWord());
+		return searchVO;
+	}
+	
+	
+	
+	
+public SearchVO searchV3(SearchParam searchDI){
+		
+		if(searchDI==null || StringUtils.isEmpty(searchDI.getQ())){
+			return null;
+		}
+		initSearchDI(searchDI);//完善搜索参数
+		SearchVO searchVO=new SearchVO();
+		List<String> subTypeList=new ArrayList<String>();
+		List<SearchEcObjVO> list=null;
+		//根据q获取搜索的场景
+//		SearchRule sceneRule=ecCacheService.getSceneRuleByQ(searchDI,searchVO);
+		SearchRule sceneRule=searchSceneService.getSearchRule(searchDI,searchVO);
+		searchVO.setSceneCode(sceneRule.getSceneCode());
+		logger.info("SceneCode()==========="+sceneRule.getSceneCode());
+		logger.info("q==========="+searchDI.getQ());
+		
+		if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())){
+			
+			//扩展同义词     只在厂牌场景扩展搜索词
+			String extendQ=analyzerService.expandQ(searchDI.getQ());
+			if(StringUtils.isNotEmpty(extendQ)){
+				searchDI.setQ(searchDI.getQ()+" "+extendQ);
+			}
+			logger.info("extendQ()==========="+searchDI.getQ());
+
+			//只有在厂牌有空格的时候，扩展空格 -
+			if(searchDI.getQ().contains(" ")){
+				searchDI.setQ(searchDI.getQ()+","+searchDI.getQ().replace(" ", "-"));
+			}
+		}
+		
+		//根据场景
+		List<Query> queryList=searchBySearchRuleV3(sceneRule,searchDI);
+		
+		Sort sort=new Sort();
+		SortField[] sortFields= sortUtil.getEcSort();
+//		if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())){
+//			sortFields= sortUtil.getScoreSort();
+//		}else{
+//			sortFields= sortUtil.getEcSort();
+//		}
+		
+		sort.setSort(sortFields);
+		try {
+			if(searchDI.getGroup()!=null && searchDI.getGroup()==1){
+				
+				BooleanQuery groupQuery=new BooleanQuery(true);
+				//处理group search 的情况
+				if(searchDI.getGroup()!=null && searchDI.getGroup()==1){
+					Query q=queryUtil.getAttributeQuery(searchDI.getGroupField(),searchDI.getGroupFieldVal(),analyzerService.getCommaAnalyzer());
+					groupQuery.add(q,Occur.SHOULD);
+					groupQuery.add(queryList.get(1),Occur.MUST);
+				}
+				
+				
+				GroupingSearch groupingSearch=new GroupingSearch(searchDI.getGroupField());
+				groupingSearch.setGroupSort(sort);//指定分组排序
+				groupingSearch.setFillSortFields(true);
+				groupingSearch.setCachingInMB(4.0, true);//缓存第一次搜索结果，用于第二次搜索
+				groupingSearch.setAllGroups(true);
+				groupingSearch.setGroupDocsLimit(20);//指定每组返回的文档数，不指定时，默认返回一个文档
+				
+				TopGroups<BytesRef> result=groupingSearch.search(indexService.getIndexSearcher(), groupQuery,0,20);
+				
+				for(GroupDocs<BytesRef> groupDocs:result.groups){
+					if(groupDocs.groupValue!=null){
+						for(ScoreDoc scoreDoc:groupDocs.scoreDocs){
+							Document	document =indexService.getIndexSearcher().doc(scoreDoc.doc);
+							if(document.get(searchDI.getGroupField())!=null && !"".equals(document.get(searchDI.getGroupField()))){
+								subTypeList.add(document.get(searchDI.getGroupField())+":"+groupDocs.totalHits);
+							}
+							break;//每一组值获取一条即可
+						}
+					}
+				}
+			}
+			
+			TopDocs topdocs=indexService.getIndexSearcher().search(queryList.get(0), searchDI.getDataNum()+searchDI.getDataOffset(),sort);
+
+			
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				list=new ArrayList<SearchEcObjVO>();
+				for(int i=searchDI.getDataNum();i<(searchDI.getDataNum()+searchDI.getDataOffset()>totalCount?totalCount:searchDI.getDataNum()+searchDI.getDataOffset());i++){
+					//带有sort排序，获取文档分组的情况
+					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							searchDI.getImgFlag(),searchDI.getSearchFlag(),(Float)((FieldDoc)scoreDoc[i]).fields[0],""));//只获取总文档分值
+					
+					
+//					Explanation explanation=indexService.getIndexSearcher().explain(queryList.get(0), scoreDoc[i].doc);
+//					
+//					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+//							searchDI.getImgFlag(),searchDI.getSearchFlag(),(Float)((FieldDoc)scoreDoc[i]).fields[0],explanation.toString()));//文档分值详情
+				}
+				
+//				setHightLight(list,searchDI.getQ(),sceneRule,searchDI.getSearchFlag());
+				hightLight.sekormv3high_update(list,searchDI.getQ(),analyzerService.getIKAnalyzer(false),searchDI.getSearchFlag());
+				
+				searchVO.setSubTypeList(subTypeList);
+				searchVO.setListEc(list);
+				searchVO.setTotalCount(totalCount);
+		} catch (Exception e) {
+			logger.error("SearchService.search error:"+e.getStackTrace());
+		}
+		
+		return searchVO;
+	}
+	
+    /**
+     * 
+     * @describe search V1-V2   针对APP
+     *
+     * @author bowen_bao
+     * @date 2017年3月6日
+     * @param
+     * @return
+     */
+	public SearchEcAgoBean searchAgo(SearchParam searchDI){
+		
+		if(searchDI==null || StringUtils.isEmpty(searchDI.getQ())){
+			return null;
+		}
+		
+		
+		initSearchDI(searchDI);
+		SearchEcAgoBean bean =new SearchEcAgoBean();
+		List<String> subTypeList=new ArrayList<String>();
+		List<SearchEcAgoVO> list=null;
+		//根据q获取搜索的场景
+//		SearchRule sceneRule=ecCacheService.getSceneRuleByQ(searchDI,null);
+		SearchRule sceneRule=searchSceneService.getSearchRule(searchDI,null);
+		
+		//根据场景
+		List<Query> queryList=searchBySearchRuleV3(sceneRule,searchDI);
+		
+		//旧版本屏蔽 章节   TODO:TEST
+		Query indexTypeQ=queryUtil.getTermQuery("indexType","6");
+		for(Query q:queryList){
+			((BooleanQuery)q).add(indexTypeQ, Occur.MUST_NOT);
+		}
+		
+		Sort sort=new Sort();
+		SortField[] sortFields= sortUtil.getEcSort();
+		sort.setSort(sortFields);
+		try {
+			if(searchDI.getGroup()!=null && searchDI.getGroup()==1){
+				
+				BooleanQuery groupQuery=new BooleanQuery(true);
+				//处理group search 的情况
+				if(searchDI.getGroup()!=null && searchDI.getGroup()==1){
+					Query q=queryUtil.getAttributeQuery(searchDI.getGroupField(),searchDI.getGroupFieldVal(),analyzerService.getCommaAnalyzer());
+					groupQuery.add(q,Occur.SHOULD);
+					groupQuery.add(queryList.get(1),Occur.MUST);
+				}
+				
+				
+				GroupingSearch groupingSearch=new GroupingSearch(searchDI.getGroupField());
+				groupingSearch.setGroupSort(sort);//指定分组排序
+				groupingSearch.setFillSortFields(true);
+				groupingSearch.setCachingInMB(4.0, true);//缓存第一次搜索结果，用于第二次搜索
+				groupingSearch.setAllGroups(true);
+				groupingSearch.setGroupDocsLimit(20);//指定每组返回的文档数，不指定时，默认返回一个文档
+				
+				TopGroups<BytesRef> result=groupingSearch.search(indexService.getIndexSearcher(), groupQuery,0,20);
+				
+				for(GroupDocs<BytesRef> groupDocs:result.groups){
+					if(groupDocs.groupValue!=null){
+						for(ScoreDoc scoreDoc:groupDocs.scoreDocs){
+							Document	document =indexService.getIndexSearcher().doc(scoreDoc.doc);
+							if(document.get(searchDI.getGroupField())!=null && !"".equals(document.get(searchDI.getGroupField()))){
+								subTypeList.add(document.get(searchDI.getGroupField())+":"+groupDocs.totalHits);
+							}
+							break;//每一组值获取一条即可
+						}
+					}
+				}
+				
+				
+				
+			}
+			
+			TopDocs topdocs=indexService.getIndexSearcher().search(queryList.get(0), searchDI.getDataNum()+searchDI.getDataOffset(),sort);
+
+			
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				list=new ArrayList<SearchEcAgoVO>();
+				for(int i=searchDI.getDataNum();i<(searchDI.getDataNum()+searchDI.getDataOffset()>totalCount?totalCount:searchDI.getDataNum()+searchDI.getDataOffset());i++){
+					//带有sort排序，获取文档分组的情况
+					list.add(documentToEcAgoData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							searchDI.getImgFlag(),searchDI.getSearchFlag()));
+				}
+				
+				//==============================================
+				if(searchDI.getIndexType().equals("3")){
+					bean.setPageSize(10);
+					if(searchDI.getDataNum()!=null&&searchDI.getDataNum()!=0){
+						bean.setPageNum(searchDI.getDataNum()/10 + 1);
+					}else{
+						bean.setPageNum(1);
+					}
+				}else{
+					bean.setPageSize(searchDI.getDataOffset());
+					if(searchDI.getDataNum()!=null&&searchDI.getDataNum()!=0){
+						bean.setPageNum(searchDI.getDataNum()/searchDI.getDataOffset() + 1);
+					}else{
+						bean.setPageNum(1);
+					}
+				}
+				
+				bean.setTotalCount(totalCount);
+				bean.setResults(list);
+				bean.setQ(searchDI.getQ());
+	        	return bean;
+	        	
+	        	
+		} catch (Exception e) {
+			logger.error("SearchService.search error:"+e.getMessage());
+		}
+		
+		return bean;
+		
+	}
+	
+	
+	public void setHightLight(List<SearchEcObjVO> list,String q,SearchRule sceneRule,String searchFlag){
+		Analyzer titleanalyzer=null;
+		Analyzer summeryanalyzer=null;
+		IndexRule indexRule=ecCacheService.getIndexRule();
+		if(indexRule!=null && indexRule.getAttributeSplit()!=null &&
+				indexRule.getAttributeSplit().get("title")!=null){
+			titleanalyzer=analyzerService.getAnalyzerByAnalyzerCode(indexRule.getAttributeSplit().get("title"));
+		}else{
+			titleanalyzer=analyzerService.getIKAnalyzer(false);
+		}
+		
+		if(indexRule!=null && indexRule.getAttributeSplit()!=null && 
+				indexRule.getAttributeSplit().get("summer")!=null){
+			summeryanalyzer=analyzerService.getAnalyzerByAnalyzerCode(indexRule.getAttributeSplit().get("summer"));
+		}else{
+			summeryanalyzer=analyzerService.getIKAnalyzer(false);
+		}
+		Analyzer qTitleanalyzer=null;
+		Analyzer qSummeryanalyzer=null;
+		if(sceneRule!=null && sceneRule.getAttributeSplit()!=null && sceneRule.getAttributeSplit().get("title")!=null){
+			qTitleanalyzer=analyzerService.getAnalyzerByAnalyzerCode(sceneRule.getAttributeSplit().get("title"));
+		}else{
+			qTitleanalyzer=analyzerService.getIKAnalyzer(false);
+		}
+		if(sceneRule!=null && sceneRule.getAttributeSplit()!=null && sceneRule.getAttributeSplit().get("summer")!=null){
+			qSummeryanalyzer=analyzerService.getAnalyzerByAnalyzerCode(sceneRule.getAttributeSplit().get("summer"));
+		}else{
+			qSummeryanalyzer=analyzerService.getIKAnalyzer(false);
+		}
+//		hightLight.sekormv3high(list,q,qTitleanalyzer,qSummeryanalyzer,titleanalyzer,summeryanalyzer,searchFlag);
+		hightLight.sekormv3high_update(list,q,analyzerService.getIKAnalyzer(false),searchFlag);
+	}
+	
+	
+	 public SearchVO termSearch(String q,String field){
+			
+			SearchVO searchVO=new SearchVO();
+			List<SearchEcObjVO> list=null;
+			Query query=new TermQuery(new Term(field,q));
+			
+			TopDocs topdocs;
+			try {
+				
+				Sort sort=new Sort();
+				SortField[] sortFields= sortUtil.getEcSort();
+				sort.setSort(sortFields);
+				
+				
+				topdocs = indexService.getIndexSearcher().search(query, 10,sort);
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				list=new ArrayList<SearchEcObjVO>();
+				for(int i=0;i<totalCount;i++){
+					
+//					Explanation explanation=indexService.getIndexSearcher().explain(query, scoreDoc[i].doc);
+					
+					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							"","1",(Float)((FieldDoc)scoreDoc[i]).fields[0],""));
+				}
+				searchVO.setListEc(list);
+				searchVO.setTotalCount(totalCount);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			
+			
+			
+			return searchVO;
+		}
+	 
+	 
+	 
+	
+	/**
+	 * 
+	 * @describe  完善SearchDI缺省参数
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月14日
+	 * @param
+	 * @return
+	 */
+	private void initSearchDI(SearchParam searchDI){
+		
+		searchDI.setOldQ(searchDI.getQ());
+		
+		if(StringUtils.isEmpty(searchDI.getSecretLevel())){
+			searchDI.setSecretLevel("1");
+		}
+		
+		if(StringUtils.isEmpty(searchDI.getTouristFlag())){
+			searchDI.setTouristFlag("0");
+		}
+		
+		if(searchDI.getDataNum()==null){
+			searchDI.setDataNum(0);
+		}
+		
+		if(searchDI.getDataOffset()==null){
+			searchDI.setDataOffset(20);
+		}
+		
+		if(StringUtils.isEmpty(searchDI.getIndexType())){
+			searchDI.setIndexType("0");
+		}
+	}
+	
+	
+	
+	/**
+	 * @describe  根据搜索规则封装Query  V4
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	private SekQuery searchBySearchRule(SearchRule sceneRule,SearchParam searchDI){
+		
+		SekQuery sekQuery=new SekQuery();
+		BooleanQuery allQuery=new BooleanQuery(true);//全局总Query
+		BooleanFilter allFilter=new BooleanFilter();//全局总Filter
+		try {
+		BooleanQuery blQuery=new BooleanQuery(true);//查询Query
+		//处理SearchDI过滤条件
+		BooleanFilter secretFilter=new BooleanFilter();//保密级别过滤Filter
+		
+		List<String> secretLevelList=commonUtil.StringToList(searchDI.getSecretLevel());
+		for(String secretLevel:secretLevelList){
+			Filter filter=new TermFilter(new Term("secretLevel",secretLevel));
+			secretFilter.add(filter,Occur.SHOULD);
+		}
+		allFilter.add(secretFilter,Occur.MUST);
+		
+		
+		if("0".equals(searchDI.getSearchFlag())){
+			Filter webShowFilter=new TermFilter(new Term("webShow","1"));
+			allFilter.add(webShowFilter,Occur.MUST);
+		}else{
+			Filter appShowFilter=new TermFilter(new Term("appShow","1")); 
+			allFilter.add(appShowFilter,Occur.MUST);
+		}
+		
+		if("0".equals(searchDI.getTouristFlag())){
+			Filter touristFlagFilter=new TermFilter(new Term("touristFlag","0"));// 游客开放
+			allFilter.add(touristFlagFilter,Occur.MUST);
+		}
+		
+		if(!"0".equals(searchDI.getIndexType())){
+			Filter indexTypeFilter=new TermFilter(new Term("indexType",searchDI.getIndexType()));
+			allFilter.add(indexTypeFilter,Occur.MUST);
+		}
+		
+		if(searchDI.getSubType()!=null){ 
+			Filter subTypeFilter=new TermFilter(new Term("subType",searchDI.getSubType()));
+			allFilter.add(subTypeFilter,Occur.MUST);
+		}
+		
+		if(searchDI.getElecCode()!=null){ 
+			Filter elecCodeFilter=new TermFilter(new Term("elecCode",searchDI.getElecCode()));
+			allFilter.add(elecCodeFilter,Occur.MUST);
+		}
+		
+		//默认屏蔽服务资源    // vip级别:  0-普通    1-vip   2-内部会员       3-使用VIP
+		if("0".equals(searchDI.getSearchFlag())) {
+			if(  "2".equals(searchDI.getMemType()) ) {
+					if("2".equals(searchDI.getIndexType()) && "服务资源".equals(searchDI.getSubType())) {//内部会员 查服务资源
+						Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+						allFilter.add(subType_61Filter,Occur.MUST);
+					}else if(!"0".equals(searchDI.getIndexType())){// 不是全部， 就过滤服务资源
+						Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+						allFilter.add(subType_61Filter,Occur.MUST_NOT);
+					}
+			}else {
+					Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+					allFilter.add(subType_61Filter,Occur.MUST_NOT);
+			}
+		}else {
+			Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+			allFilter.add(subType_61Filter,Occur.MUST_NOT);
+		}
+		
+		
+		BooleanQuery attriQuery=new BooleanQuery(true);     //属性Query  属性加权
+		BooleanQuery attriValQuery=new BooleanQuery(true);  //属性值Query 属性值加权
+		
+		List<String> list=searchDI.getPnExpandWordList();
+		//处理属性分词和属性权重
+		for(String key: sceneRule.getAttributeWeight().keySet()){
+			
+			if(key==null) {
+				continue;
+			}
+			
+			if("brandName".equals(key) ||  "goodsName".equals(key) || "elecName".equals(key)) {
+				if(searchDI.getMatchsList()!=null && searchDI.getMatchsList().size()>0 ) {
+					continue;
+				}
+			}
+			
+			if("pnName".equals(key)) {
+				if(list!=null && list.size()>0) {
+					continue;
+				}
+			}
+			
+			
+			if(sceneRule.getAttributeWeight().get(key)!=0 ){
+				Query query;
+				if(SearchCoreConstant.ANALYZER_NO_CODE.equals(sceneRule.getAttributeSplit().get(key))){
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ()); 
+				}else{
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ(), 
+							analyzerService.getAnalyzerByAnalyzerCode(sceneRule.getAttributeSplit().get(key)));  
+				}
+				if(query!=null){
+					query.setBoost(sceneRule.getAttributeWeight().get(key));
+					attriQuery.add(query, Occur.SHOULD);
+					
+					//属性值过滤(全局)
+					if(sceneRule.getAttrValFilter()!=null && sceneRule.getAttrValFilter().containsKey(key)){
+						for(String filterAttr:sceneRule.getAttrValFilter().get(key).keySet()){
+							Filter filterValFilter=null;
+							if(SearchCoreConstant.FILTER_SHOULD_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.SHOULD);
+							}else if(SearchCoreConstant.FILTER_MUST_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.MUST);
+							}else if(SearchCoreConstant.FILTER_MUST_NOT_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.MUST_NOT);
+							}
+						}
+					}
+					
+					//属性值加权
+					if(sceneRule.getAttrValWeight()!=null && sceneRule.getAttrValWeight().containsKey(key)){
+						
+						for(String weightAttr:sceneRule.getAttrValWeight().get(key).keySet()){
+							Query weightQuery=null;
+							weightQuery=queryUtil.getAttributeQuery(key,weightAttr);
+							weightQuery.setBoost(sceneRule.getAttrValWeight().get(key).get(weightAttr));
+							attriValQuery.add(weightQuery, Occur.SHOULD);
+						}
+					}
+					
+				}
+				
+			}
+		}
+		
+		if(searchDI.getMatchsList()!=null &&  searchDI.getMatchsList().size()>0) {
+			//词按sekAnalyzer分类封装Query
+			for(Matchs matchs:searchDI.getMatchsList()) {//1:厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+				if(1==matchs.getUnitType() &&  null!=sceneRule.getAttributeWeight().get("brandName")) {
+					Query querybrand=queryUtil.getTermQuery("brandName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+					querybrand.setBoost(sceneRule.getAttributeWeight().get("brandName"));
+					attriQuery.add(querybrand, Occur.SHOULD);
+				}else if(2==matchs.getUnitType() && null!=sceneRule.getAttributeWeight().get("goodsName")) {
+					Query queryGoods=queryUtil.getTermQuery("goodsName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+					queryGoods.setBoost(sceneRule.getAttributeWeight().get("goodsName"));
+					attriQuery.add(queryGoods, Occur.SHOULD);
+				}else if(3==matchs.getUnitType() && null!=sceneRule.getAttributeWeight().get("elecName")) {
+					Query queryElec=queryUtil.getTermQuery("elecName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+					queryElec.setBoost(sceneRule.getAttributeWeight().get("elecName"));
+					attriQuery.add(queryElec, Occur.SHOULD);
+				}
+			}
+		}
+		
+		
+		if(list!=null && list.size()>0 && null!=sceneRule.getAttributeWeight().get("pnName")) {
+			for(int i=0;i<list.size();i++) {
+				Query queryPn=queryUtil.getTermQuery("pnName", list.get(i).replaceAll("/", "-").replaceAll(" ", "-"));
+				queryPn.setBoost(sceneRule.getAttributeWeight().get("pnName")*(float)(1.0-0.1*i));
+				attriQuery.add(queryPn, Occur.SHOULD);
+			}
+		}
+		
+		
+		
+		
+		
+		
+		
+		
+		//**************** add  title summary 全匹配
+//			List<String> analyzerQ=analyzerService.ikAnalyzerQ(searchDI.getOldQ(), analyzerService.getIKAnalyzer(false));//细粒度
+//			BooleanQuery titleAnalQuery=new BooleanQuery();
+//			BooleanQuery summaryAnalQ=new BooleanQuery();
+//			for(String s:analyzerQ) {
+//				titleAnalQuery.add(queryUtil.getTermQuery("title", s),Occur.MUST);
+//				summaryAnalQ.add(queryUtil.getTermQuery("summary", s),Occur.MUST);
+//			}
+//			titleAnalQuery.setBoost(1000f);
+//			summaryAnalQ.setBoost(1000f);
+//			blQuery.add(titleAnalQuery,Occur.SHOULD);
+//			blQuery.add(summaryAnalQ,Occur.SHOULD);
+		//**************** add  title summary 全匹配	
+			
+		
+			blQuery.add(attriQuery, Occur.MUST);
+			blQuery.add(attriValQuery, Occur.SHOULD);
+			
+			allQuery.add(blQuery,Occur.MUST);
+			
+			sekQuery.setQuery(allQuery);
+			sekQuery.setFilter(allFilter);
+			
+		} catch (Exception e) {
+			logger.error("SearcService searchBySearchRule error"+e.getMessage());
+			e.printStackTrace();
+		}
+			return sekQuery;
+	}
+	
+	
+	
+	
+	
+	/**
+	 * @describe  根据搜索规则封装Query  V4
+	 */
+	private SekQuery searchBySearchRule(SearchRule sceneRule,TestSearchDI searchDI){
+		
+		SekQuery sekQuery=new SekQuery();
+		BooleanQuery allQuery=new BooleanQuery(true);//全局总Query
+		BooleanFilter allFilter=new BooleanFilter();//全局总Filter
+		try {
+		BooleanQuery blQuery=new BooleanQuery(true);//查询Query
+		//处理SearchDI过滤条件
+		BooleanFilter secretFilter=new BooleanFilter();//保密级别过滤Filter
+		
+		List<String> secretLevelList=commonUtil.StringToList(searchDI.getSecretLevel());
+		for(String secretLevel:secretLevelList){
+			Filter filter=new TermFilter(new Term("secretLevel",secretLevel));
+			secretFilter.add(filter,Occur.SHOULD);
+		}
+		allFilter.add(secretFilter,Occur.MUST);
+		
+		
+		if("0".equals(searchDI.getSearchFlag())){
+			Filter webShowFilter=new TermFilter(new Term("webShow","1"));
+			allFilter.add(webShowFilter,Occur.MUST);
+		}else{
+			Filter appShowFilter=new TermFilter(new Term("appShow","1")); 
+			allFilter.add(appShowFilter,Occur.MUST);
+		}
+		
+		if("0".equals(searchDI.getTouristFlag())){
+			Filter touristFlagFilter=new TermFilter(new Term("touristFlag","0"));// 游客开放
+			allFilter.add(touristFlagFilter,Occur.MUST);
+		}
+		
+		if(!"0".equals(searchDI.getIndexType())){
+			Filter indexTypeFilter=new TermFilter(new Term("indexType",searchDI.getIndexType()));
+			allFilter.add(indexTypeFilter,Occur.MUST);
+		}
+		
+		if(searchDI.getSubType()!=null){ 
+			Filter subTypeFilter=new TermFilter(new Term("subType",searchDI.getSubType()));
+			allFilter.add(subTypeFilter,Occur.MUST);
+		}
+		
+		if(searchDI.getElecCode()!=null){ 
+			Filter elecCodeFilter=new TermFilter(new Term("elecCode",searchDI.getElecCode()));
+			allFilter.add(elecCodeFilter,Occur.MUST);
+		}
+		
+		//默认屏蔽服务资源    // vip级别:  0-普通    1-vip   2-内部会员       3-使用VIP
+		if("0".equals(searchDI.getSearchFlag())) {
+			if(  "2".equals(searchDI.getMemType()) ) {
+					if("2".equals(searchDI.getIndexType()) && "服务资源".equals(searchDI.getSubType())) {//内部会员 查服务资源
+						Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+						allFilter.add(subType_61Filter,Occur.MUST);
+					}else if(!"0".equals(searchDI.getIndexType())){// 不是全部， 就过滤服务资源
+						Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+						allFilter.add(subType_61Filter,Occur.MUST_NOT);
+					}
+			}else {
+					Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+					allFilter.add(subType_61Filter,Occur.MUST_NOT);
+			}
+		}else {
+			Filter subType_61Filter=new TermFilter(new Term("subType","服务资源"));
+			allFilter.add(subType_61Filter,Occur.MUST_NOT);
+		}
+		
+		
+		BooleanQuery attriQuery=new BooleanQuery(true);     //属性Query  属性加权
+		BooleanQuery attriValQuery=new BooleanQuery(true);  //属性值Query 属性值加权
+		
+		//处理属性分词和属性权重
+		for(String key: sceneRule.getAttributeWeight().keySet()){
+			
+			if(key==null) {
+				continue;
+			}
+			
+			if("brandName".equals(key)) {
+				//词按sekAnalyzer分类封装Query
+				if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())) {
+					List<Matchs> listMatchs= sekAnalyzerService.getSekScene(searchDI.getQ());
+					for(Matchs matchs:listMatchs) {//1:厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+//						System.out.println(matchs.getFinalString()+"|"+matchs.getUnitType());
+						if(1==matchs.getUnitType()) {
+							Query querybrand=queryUtil.getTermQuery("brandName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+							querybrand.setBoost(sceneRule.getAttributeWeight().get(key));
+							attriQuery.add(querybrand, Occur.SHOULD);
+						}
+					}
+				}
+				continue;
+			}
+			if("goodsName".equals(key)) {
+				//词按sekAnalyzer分类封装Query
+				if(SearchCoreConstant.SCENE_GOODS_CODE.equals(sceneRule.getSceneCode())) {
+					List<Matchs> listMatchs= sekAnalyzerService.getSekScene(searchDI.getQ());
+					for(Matchs matchs:listMatchs) {//1:厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+						if(2==matchs.getUnitType()) {
+							Query queryGoods=queryUtil.getTermQuery("goodsName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+							queryGoods.setBoost(sceneRule.getAttributeWeight().get(key));
+							attriQuery.add(queryGoods, Occur.SHOULD);
+						}
+					}
+				}
+				continue;
+			}
+			if("elecName".equals(key)) {
+				//词按sekAnalyzer分类封装Query
+				if(SearchCoreConstant.SCENE_ELEC_CODE.equals(sceneRule.getSceneCode())) {
+					List<Matchs> listMatchs= sekAnalyzerService.getSekScene(searchDI.getQ());
+					for(Matchs matchs:listMatchs) {//1:厂牌 2:商品分类(产品) 3:市场应用(应用) 4:PN(型号)
+						if(3==matchs.getUnitType()) {
+							Query queryElec=queryUtil.getTermQuery("elecName", matchs.getFinalString().replaceAll("/", "-").replaceAll(" ", "-"));
+							queryElec.setBoost(sceneRule.getAttributeWeight().get(key));
+							attriQuery.add(queryElec, Occur.SHOULD);
+						}
+					}
+				}
+				continue;
+			}
+			if("pnName".equals(key)) {
+				//词按sekAnalyzer分类封装Query
+				if(SearchCoreConstant.SCENE_PNPLS_CODE.equals(sceneRule.getSceneCode())) {
+					List<String> list=ecDataService.getPnExpandWord(searchDI.getQ());
+					for(int i=0;i<list.size();i++) {
+						Query queryPn=queryUtil.getTermQuery("pnName", list.get(i).replaceAll("/", "-").replaceAll(" ", "-"));
+						queryPn.setBoost(sceneRule.getAttributeWeight().get(key)*(float)(1.0-0.1*i));
+						attriQuery.add(queryPn, Occur.SHOULD);
+					}
+				}
+				continue;
+			}
+			
+			if(sceneRule.getAttributeWeight().get(key)!=0 ){
+				Query query;
+				if(SearchCoreConstant.ANALYZER_NO_CODE.equals(sceneRule.getAttributeSplit().get(key))){
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ()); 
+				}else{
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ(), 
+							analyzerService.getAnalyzerByAnalyzerCode(sceneRule.getAttributeSplit().get(key)));  
+				}
+				if(query!=null){
+					query.setBoost(sceneRule.getAttributeWeight().get(key));
+					attriQuery.add(query, Occur.SHOULD);
+					
+					//属性值过滤(全局)
+					if(sceneRule.getAttrValFilter()!=null && sceneRule.getAttrValFilter().containsKey(key)){
+						for(String filterAttr:sceneRule.getAttrValFilter().get(key).keySet()){
+							Filter filterValFilter=null;
+							if(SearchCoreConstant.FILTER_SHOULD_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.SHOULD);
+							}else if(SearchCoreConstant.FILTER_MUST_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.MUST);
+							}else if(SearchCoreConstant.FILTER_MUST_NOT_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValFilter=new TermFilter(new Term(key,filterAttr.toLowerCase()));
+								allFilter.add(filterValFilter, Occur.MUST_NOT);
+							}
+						}
+					}
+					
+					//属性值加权
+					if(sceneRule.getAttrValWeight()!=null && sceneRule.getAttrValWeight().containsKey(key)){
+						
+						for(String weightAttr:sceneRule.getAttrValWeight().get(key).keySet()){
+							Query weightQuery=null;
+							weightQuery=queryUtil.getAttributeQuery(key,weightAttr);
+							weightQuery.setBoost(sceneRule.getAttrValWeight().get(key).get(weightAttr));
+							attriValQuery.add(weightQuery, Occur.SHOULD);
+						}
+					}
+					
+				}
+				
+			}
+		}
+		
+		
+			blQuery.add(attriQuery, Occur.MUST);
+			blQuery.add(attriValQuery, Occur.SHOULD);
+			
+			allQuery.add(blQuery,Occur.MUST);
+			
+			sekQuery.setQuery(allQuery);
+			sekQuery.setFilter(allFilter);
+			
+		} catch (Exception e) {
+			logger.error("SearcService searchBySearchRule error"+e.getMessage());
+			e.printStackTrace();
+		}
+			return sekQuery;
+	}
+
+	
+	/**
+	 * 
+	 * @describe  根据搜索规则封装Query
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	private List<Query> searchBySearchRuleV3(SearchRule sceneRule,SearchParam searchDI){
+		
+		List<Query> listQ=new ArrayList<Query>();
+		
+		BooleanQuery allQuery=new BooleanQuery(true);//全局总Query
+		BooleanQuery groupAllQuery=new BooleanQuery(true);
+		try {
+		
+			BooleanQuery blQuery=new BooleanQuery(true);//查询Query
+			BooleanQuery groupBlQuery=new BooleanQuery(true);//group查询Query
+		
+		//处理SearchDI过滤条件
+		BooleanQuery secretQuery=new BooleanQuery(true);//保密级别过滤Query
+		List<String> secretLevelList=commonUtil.StringToList(searchDI.getSecretLevel());
+		for(String secretLevel:secretLevelList){
+			Query secretQ=queryUtil.getTermQuery("secretLevel",secretLevel);
+			secretQ.setBoost(0.0000000000001f);
+			secretQuery.add(secretQ,Occur.SHOULD);
+		}
+		allQuery.add(secretQuery,Occur.MUST);
+		groupBlQuery.add(secretQuery,Occur.MUST);
+		
+		
+		
+		if("0".equals(searchDI.getSearchFlag())){
+			Query webShowQ=queryUtil.getTermQuery("webShow","1"); 
+			webShowQ.setBoost(0.0000000000001f);
+			allQuery.add(webShowQ,Occur.MUST);
+			groupBlQuery.add(webShowQ,Occur.MUST);
+		}else{
+			Query appShowQ=queryUtil.getTermQuery("appShow","1"); 
+			appShowQ.setBoost(0.0000000000001f);
+			allQuery.add(appShowQ,Occur.MUST);
+			groupBlQuery.add(appShowQ,Occur.MUST);
+		}
+		
+		if("0".equals(searchDI.getTouristFlag())){
+			Query touristFlagQ=queryUtil.getTermQuery("touristFlag","0");// 游客开放
+			touristFlagQ.setBoost(0.0000000000001f);
+			allQuery.add(touristFlagQ,Occur.MUST);
+			groupBlQuery.add(touristFlagQ,Occur.MUST);
+		}
+		
+		if(!"0".equals(searchDI.getIndexType())){
+			Query indexTypeQ=queryUtil.getTermQuery("indexType",searchDI.getIndexType());
+			indexTypeQ.setBoost(0.0000000000001f);
+			allQuery.add(indexTypeQ,Occur.MUST);
+			groupBlQuery.add(indexTypeQ,Occur.MUST);
+		}
+		
+		if(searchDI.getSubType()!=null){//subType 不放入groupShowQuery里面
+			Query subTypeQ=queryUtil.getTermQuery("subType",searchDI.getSubType());
+			allQuery.add(subTypeQ,Occur.MUST);
+		}
+		
+		if(searchDI.getElecCode()!=null){//elecCode 不放入groupShowQuery里面
+			Query elecCodeQ=queryUtil.getTermQuery("elecCode",searchDI.getElecCode());
+			allQuery.add(elecCodeQ,Occur.MUST);
+		}
+		
+		BooleanQuery attriQuery=new BooleanQuery(true);     //属性Query  一级过滤
+		BooleanQuery attriValQuery=new BooleanQuery(true);  //属性值Query 二级过滤
+		
+		//处理属性分词和属性权重
+		for(String key: sceneRule.getAttributeWeight().keySet()){   
+			
+			if(sceneRule.getAttributeWeight().get(key)!=0 ){
+				Query query;
+				if(SearchCoreConstant.ANALYZER_NO_CODE.equals(sceneRule.getAttributeSplit().get(key))){
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ().replace('/', '-'));//TODO:lucene源码对/不支持分词
+				}else{
+					query = queryUtil.getAttributeQuery(key, searchDI.getQ().replace('/', '-'), 
+							analyzerService.getAnalyzerByAnalyzerCode(sceneRule.getAttributeSplit().get(key)));  
+				}
+				if(query!=null){
+					query.setBoost(sceneRule.getAttributeWeight().get(key));
+					attriQuery.add(query, Occur.SHOULD);
+					
+					//属性值过滤(全局)
+					if(sceneRule.getAttrValFilter()!=null && sceneRule.getAttrValFilter().containsKey(key)){
+						for(String filterAttr:sceneRule.getAttrValFilter().get(key).keySet()){
+							Query filterValQuery=null;
+							if(SearchCoreConstant.FILTER_SHOULD_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValQuery=queryUtil.getAttributeQuery(key,filterAttr);
+								allQuery.add(filterValQuery, Occur.SHOULD);
+								groupAllQuery.add(filterValQuery, Occur.SHOULD);
+							}else if(SearchCoreConstant.FILTER_MUST_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValQuery=queryUtil.getAttributeQuery(key,filterAttr);
+								allQuery.add(filterValQuery, Occur.MUST);
+								groupAllQuery.add(filterValQuery, Occur.MUST);
+							}else if(SearchCoreConstant.FILTER_MUST_NOT_CODE.equals(sceneRule.getAttrValFilter().get(key).get(filterAttr))){
+								filterValQuery=queryUtil.getAttributeQuery(key,filterAttr);
+								allQuery.add(filterValQuery, Occur.MUST_NOT);
+								groupAllQuery.add(filterValQuery, Occur.MUST_NOT);
+							}
+						}
+					}
+					
+					//属性值加权
+					if(sceneRule.getAttrValWeight()!=null && sceneRule.getAttrValWeight().containsKey(key)){
+						
+						for(String weightAttr:sceneRule.getAttrValWeight().get(key).keySet()){
+							Query weightQuery=null;
+							weightQuery=queryUtil.getAttributeQuery(key,weightAttr);
+							weightQuery.setBoost(sceneRule.getAttrValWeight().get(key).get(weightAttr));
+							attriValQuery.add(weightQuery, Occur.SHOULD);
+						}
+					}
+					
+				}
+				
+			}
+		}
+		
+		//**************** add  title summary 全匹配
+			List<String> analyzerQ=analyzerService.ikAnalyzerQ(searchDI.getOldQ(), analyzerService.getIKAnalyzer(false));//细粒度
+			BooleanQuery titleAnalQuery=new BooleanQuery();
+			BooleanQuery summaryAnalQ=new BooleanQuery();
+			for(String s:analyzerQ) {
+				titleAnalQuery.add(queryUtil.getTermQuery("title", s),Occur.MUST);
+				summaryAnalQ.add(queryUtil.getTermQuery("summary", s),Occur.MUST);
+			}
+			titleAnalQuery.setBoost(1000f);
+			summaryAnalQ.setBoost(1000f);
+			blQuery.add(titleAnalQuery,Occur.SHOULD);
+			blQuery.add(summaryAnalQ,Occur.SHOULD);
+			
+			
+		
+		blQuery.add(attriQuery, Occur.MUST);
+		blQuery.add(attriValQuery, Occur.SHOULD);
+		groupBlQuery.add(attriQuery, Occur.MUST);
+		groupBlQuery.add(attriValQuery, Occur.SHOULD);
+		
+		
+			allQuery.add(blQuery,Occur.MUST);
+			
+			groupAllQuery.add(groupBlQuery,Occur.MUST);
+			
+		} catch (Exception e) {
+			logger.error("SearcService searchBySearchRule error"+e.getMessage());
+			e.printStackTrace();
+		}
+		listQ.add(allQuery);
+		if(searchDI.getGroup()!=null &&  searchDI.getGroup()==1){
+			listQ.add(groupAllQuery);
+		}
+			return listQ;
+	}
+	
+	
+	/**
+	 * 
+	 * @describe Index Document 转    EcData  v3
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月13日
+	 * @param
+	 * @return
+	 */
+	 public SearchEcObjVO documentToEcData(Document document,String imgFlag,String searchFlag,float indexScore,String explanation){
+		 
+		    SearchEcObjVO obj=new SearchEcObjVO();
+			obj.setIndexType(document.get("indexType"));
+			
+			obj.setId(Integer.parseInt(document.get("id")));
+			
+			if(StringUtils.isNotEmpty(document.get("ecNewid"))){
+				obj.setEcNewid(Integer.parseInt(document.get("ecNewid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("ecDocid"))){
+				obj.setEcDocid(Integer.parseInt(document.get("ecDocid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("questionid"))){
+				obj.setQuestionid(Integer.parseInt(document.get("questionid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("title"))){
+				obj.setTitle(document.get("title"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("summary"))){
+				obj.setSummary(document.get("summary"));
+			}
+			
+			if(StringUtils.isEmpty(imgFlag)){
+				imgFlag="2";
+			}
+			if(StringUtils.isEmpty(searchFlag)){
+				searchFlag="0";
+			}
+			
+			if("0".equals(searchFlag)){//web
+				if("1".equals(obj.getIndexType())){
+					if(document.get("img2")!=null ){
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img2"));
+					}else{
+						obj.setImg("");
+					}
+				}
+				if("2".equals(obj.getIndexType())){
+					if(document.get("img2")!=null ){
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img2"));
+					}else{
+						obj.setImg("");
+					}
+				}
+			}else if("1".equals(searchFlag)){//手机 android
+				if("1".equals(obj.getIndexType())){
+					if("2".equals(imgFlag)){
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img5"));
+					}else{
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img"+imgFlag));
+					}
+				}
+				if("2".equals(obj.getIndexType())){
+					if("2".equals(imgFlag)){
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img5"));
+					}else{
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img"+imgFlag));
+					}
+				}
+			}else if("2".equals(searchFlag)){//手机 ios
+				if("1".equals(obj.getIndexType())){
+					if("2".equals(imgFlag)){
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img6"));
+					}else{
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img"+imgFlag));
+					}
+				}
+				if("2".equals(obj.getIndexType())){
+					if("2".equals(imgFlag)){
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img6"));
+					}else{
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img"+imgFlag));
+					}
+				}
+			}else{
+				if("1".equals(obj.getIndexType())){
+					if(document.get("img2")!=null ){
+						obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img2"));
+					}else{
+						obj.setImg("");
+					}
+				}
+				if("2".equals(obj.getIndexType())){
+					if(document.get("img2")!=null ){
+						obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img2"));
+					}else{
+						obj.setImg("");
+					}
+				}
+			}
+			
+			if(document.get("publishTime")!=null){
+				obj.setPublishTime(document.get("publishTime"));
+			}else{
+				obj.setPublishTime("");
+			}
+			
+			if(document.get("secretLevel")!=null && !"".equals(document.get("secretLevel"))){
+				obj.setSecretLevel(document.get("secretLevel"));
+			}else{
+				obj.setSecretLevel("");
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("docExt"))){
+				obj.setDocExt(document.get("docExt"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("subType"))){
+				obj.setSubType(document.get("subType"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("elecCode"))){
+				obj.setElecCode(document.get("elecCode"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("searchKeyword"))){
+				obj.setSearchKeyword(document.get("searchKeyword"));
+			}
+			
+			obj.setIndexScore(indexScore);
+			
+			obj.setExplanation(explanation);
+			
+		 return obj;
+	 }
+	 
+	 
+	 
+	 
+	 //TestSearch 专用
+	 public TestSearchEcObjVO documentToEcData(Document document,String searchFlag,float indexScore,String explanation){
+		 
+		 TestSearchEcObjVO obj=new TestSearchEcObjVO();
+			obj.setIndexType(document.get("indexType"));
+			
+			obj.setId(Integer.parseInt(document.get("id")));
+			
+			if(StringUtils.isNotEmpty(document.get("ecNewid"))){
+				obj.setEcNewid(Integer.parseInt(document.get("ecNewid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("ecDocid"))){
+				obj.setEcDocid(Integer.parseInt(document.get("ecDocid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("questionid"))){
+				obj.setQuestionid(Integer.parseInt(document.get("questionid")));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("title"))){
+				obj.setTitle(document.get("title"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("summary"))){
+				obj.setSummary(document.get("summary"));
+			}
+			
+			if(StringUtils.isEmpty(searchFlag)){
+				searchFlag="0";
+			}
+			
+			
+			if(document.get("publishTime")!=null){
+				obj.setPublishTime(document.get("publishTime"));
+			}else{
+				obj.setPublishTime("");
+			}
+			
+			if(document.get("secretLevel")!=null && !"".equals(document.get("secretLevel"))){
+				obj.setSecretLevel(document.get("secretLevel"));
+			}else{
+				obj.setSecretLevel("");
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("docExt"))){
+				obj.setDocExt(document.get("docExt"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("subType"))){
+				obj.setSubType(document.get("subType"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("elecCode"))){
+				obj.setElecCode(document.get("elecCode"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("searchKeyword"))){
+				obj.setSearchKeyword(document.get("searchKeyword"));
+			}
+			
+			obj.setIndexScore(indexScore);
+			
+			obj.setExplanation(explanation);
+			
+		 return obj;
+	 }
+	 
+	 
+	 
+	 public ONEcDocVO documentToONEcDocVO(Document document,float indexScore,Integer nCount){
+		 
+		 	ONEcDocVO obj=new ONEcDocVO();
+			
+			obj.setId(Integer.parseInt(document.get("id")));
+			
+			
+			if(StringUtils.isNotEmpty(document.get("title"))){
+				obj.setTitle(document.get("title"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("subType"))){
+				obj.setSubType(document.get("subType"));
+			}
+			
+			if(StringUtils.isNotEmpty(document.get("keyword"))){
+				obj.setKeyword(document.get("keyword"));
+			}
+			
+			obj.setIndexScore(indexScore);
+			
+			obj.setnCount(nCount);
+			
+		 return obj;
+	 }
+	 
+	 
+	 /**
+		 * 
+		 * @describe Index Document 转    EcData  v3   供后台看分值
+		 *
+		 * @author bowen_bao
+		 * @date 2017年2月13日
+		 * @param
+		 * @return
+		 */
+	 public SearchEcObjVO documentToEcScore(Document document,float indexScore,String explanation){
+		 
+		    SearchEcObjVO obj=new SearchEcObjVO();
+			obj.setIndexType(document.get("indexType"));
+			
+			obj.setId(Integer.parseInt(document.get("id")));
+			
+			
+			if(StringUtils.isNotEmpty(document.get("title"))){
+				obj.setTitle(document.get("title"));
+			}
+			
+			obj.setIndexScore(indexScore);
+			
+			obj.setExplanation(explanation);
+			
+		 return obj;
+	 }
+	 
+	 
+	 
+	 
+	 
+	 /**
+		 * 
+		 * @describe Index Document 转    EcData  v1 v2
+		 *
+		 * @author bowen_bao
+		 * @date 2017年2月13日
+		 * @param
+		 * @return
+		 */
+		 public SearchEcAgoVO documentToEcAgoData(Document document,String imgFlag,String searchFlag){
+			 
+			 SearchEcAgoVO obj=new SearchEcAgoVO();
+				obj.setIndexType(document.get("indexType"));
+				
+				
+				if(StringUtils.isNotEmpty(document.get("ecNewid"))){
+					obj.setEcNewid(Integer.parseInt(document.get("ecNewid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("ecDocid"))){
+					obj.setEcDocid(Integer.parseInt(document.get("ecDocid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("questionid"))){
+					obj.setQuestionid(Integer.parseInt(document.get("questionid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("title"))){
+					obj.setTitle(document.get("title"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("summary"))){
+					obj.setSummary(document.get("summary"));
+				}
+				
+				if(StringUtils.isEmpty(imgFlag)){
+					imgFlag="2";
+				}
+				if(StringUtils.isEmpty(searchFlag)){
+					searchFlag="1";
+				}
+				
+				if("1".equals(searchFlag)){//手机 android
+					if("1".equals(obj.getIndexType())){
+						if("2".equals(imgFlag)){
+							obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img5"));
+						}else{
+							obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img"+imgFlag));
+						}
+					}
+					if("2".equals(obj.getIndexType())){
+						if("2".equals(imgFlag)){
+							obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img5"));
+						}else{
+							obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img"+imgFlag));
+						}
+					}
+				}else if("2".equals(searchFlag)){//手机 ios
+					if("1".equals(obj.getIndexType())){
+						if("2".equals(imgFlag)){
+							obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img6"));
+						}else{
+							obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img"+imgFlag));
+						}
+					}
+					if("2".equals(obj.getIndexType())){
+						if("2".equals(imgFlag)){
+							obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img6"));
+						}else{
+							obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img"+imgFlag));
+						}
+					}
+				}else{
+					if("1".equals(obj.getIndexType())){
+						if(document.get("img2")!=null ){
+							obj.setImg(file_url+SearchCoreConstant.ECNEW_IMGPATH+document.get("img2"));
+						}else{
+							obj.setImg("");
+						}
+					}
+					if("2".equals(obj.getIndexType())){
+						if(document.get("img2")!=null ){
+							obj.setImg(file_url+SearchCoreConstant.ECDOC_IMGPATH+document.get("img2"));
+						}else{
+							obj.setImg("");
+						}
+					}
+				}
+				
+				if(document.get("publishTime")!=null){
+					obj.setPublishTime(document.get("publishTime"));
+					obj.setCreateTime(document.get("publishTime"));
+					obj.setUpdateTime(document.get("publishTime"));
+					obj.setFrontTime(document.get("publishTime"));
+				}else{
+					obj.setPublishTime("");
+					obj.setCreateTime("");
+					obj.setUpdateTime("");
+					obj.setFrontTime("");
+				}
+				
+				if(document.get("secretLevel")!=null && !"".equals(document.get("secretLevel"))){
+					obj.setSecretLevel(document.get("secretLevel"));
+				}else{
+					obj.setSecretLevel("");
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("docExt"))){
+					obj.setDocExt(document.get("docExt"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("keyword"))){
+					obj.setSearchKeyword(document.get("keyword"));
+				}
+				
+				obj.setInfoType("");
+				obj.setDocDownName("");
+				
+			 return obj;
+		 }
+		 
+		 
+		 
+		 /**
+		  * 
+		  * @describe 展示index 的数据
+		  *
+		  * @author bowen_bao
+		  * @date 2017年3月10日
+		  * @param
+		  * @return
+		  */
+		 public EcData documentToEcDetailData(Document document){
+			 
+			 EcData obj=new EcData();
+				obj.setIndexType(document.get("indexType"));
+				
+				obj.setId(Integer.parseInt(document.get("id")));
+				
+				if(StringUtils.isNotEmpty(document.get("ecNewid"))){
+					obj.setEcNewid(Integer.parseInt(document.get("ecNewid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("ecDocid"))){
+					obj.setEcDocid(Integer.parseInt(document.get("ecDocid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("questionid"))){
+					obj.setQuestionid(Integer.parseInt(document.get("questionid")));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("docCode"))){
+					obj.setDocCode(Integer.parseInt(document.get("docCode")));
+				}
+				
+				
+				
+				if(document.get("secretLevel")!=null && !"".equals(document.get("secretLevel"))){
+					obj.setSecretLevel(document.get("secretLevel"));
+				}
+				
+				if(document.get("touristFlag")!=null && !"".equals(document.get("touristFlag"))){
+					obj.setTouristFlag(document.get("touristFlag"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("title"))){
+					obj.setTitle(document.get("title"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("summary"))){
+					obj.setSummary(document.get("summary"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("detail"))){
+					obj.setDetail(document.get("detail"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("keyword"))){
+					obj.setKeyword(document.get("keyword"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("brandName"))){
+					obj.setBrandName(document.get("brandName"));
+				}
+				
+				
+				
+				if(StringUtils.isNotEmpty(document.get("elecName"))){
+					obj.setElecName(document.get("elecName"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("goodsName"))){
+					obj.setGoodsName(document.get("goodsName"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("pnName"))){
+					obj.setPnName(document.get("pnName"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("pnResembleCode"))){
+					obj.setPnResembleCode(document.get("pnResembleCode"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("packageInfo"))){
+					obj.setPackageInfo(document.get("packageInfo"));
+				}
+				
+				
+				if(StringUtils.isNotEmpty(document.get("docExt"))){
+					obj.setDocExt(document.get("docExt"));
+				}
+				
+				if(StringUtils.isNotEmpty(document.get("subType"))){
+					obj.setSubType(document.get("subType"));
+				}
+				
+			 return obj;
+		 }
+		 
+		 
+		 
+	 
+	 /**
+	  * 
+	  * @describe  获取索引库元数据的数量，按indexType来获取
+	  *
+	  * @author bowen_bao
+	  * @date 2017年2月21日
+	  * @param
+	  * @return
+	  */
+	 public Integer getEcDataNumByIndexType(String indexType){
+			
+		 int n=0;
+	    	BooleanQuery query=new BooleanQuery();
+	    	if(indexType==null || "".equals(indexType)){
+	    		Query indextypeQ1=queryUtil.getTermQuery("indexType","1");
+	    		Query indextypeQ2=queryUtil.getTermQuery("indexType","2");
+	    		Query indextypeQ3=queryUtil.getTermQuery("indexType","3");
+	    		query.add(indextypeQ1,Occur.SHOULD);
+	    		query.add(indextypeQ2,Occur.SHOULD);
+	    		query.add(indextypeQ3,Occur.SHOULD);
+	    	}else{
+	    		Query indextypeQ1=queryUtil.getTermQuery("indexType",indexType);
+	    		query.add(indextypeQ1,Occur.SHOULD);
+	    	}
+			
+			TopDocs topdocs;
+			try {
+				topdocs = indexService.getIndexSearcher().search(query, Integer.MAX_VALUE);
+				ScoreDoc[] scoreDocs=topdocs.scoreDocs;
+				n=scoreDocs.length;
+			} catch (IOException e) {
+				logger.error("SearchService  getEcDataByIndexType error===",e);
+			}
+	    	return n;
+	 }
+
+
+
+	 public SearchVO getEcDataByIndexType(String indexType){
+			
+		 SearchVO searchVO=new SearchVO();
+	    	BooleanQuery query=new BooleanQuery();
+	    	if(indexType==null || "".equals(indexType)){
+	    		Query indextypeQ1=queryUtil.getTermQuery("indexType","1");
+	    		Query indextypeQ2=queryUtil.getTermQuery("indexType","2");
+	    		Query indextypeQ3=queryUtil.getTermQuery("indexType","3");
+	    		query.add(indextypeQ1,Occur.SHOULD);
+	    		query.add(indextypeQ2,Occur.SHOULD);
+	    		query.add(indextypeQ3,Occur.SHOULD);
+	    	}else{
+	    		Query indextypeQ1=queryUtil.getTermQuery("indexType",indexType);
+	    		query.add(indextypeQ1,Occur.SHOULD);
+	    	}
+			
+			TopDocs topdocs;
+			try {
+				
+				Sort sort=new Sort();
+				SortField[] sortFields= sortUtil.getEcSort();
+				sort.setSort(sortFields);
+				
+				topdocs = indexService.getIndexSearcher().search(query, Integer.MAX_VALUE,sort);
+				
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				List<SearchEcObjVO> list=new ArrayList<SearchEcObjVO>();
+				for(int i=0;i<totalCount;i++){
+					
+//					Explanation explanation=indexService.getIndexSearcher().explain(query, scoreDoc[i].doc);
+					
+					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							"","1",(Float)((FieldDoc)scoreDoc[i]).fields[0],""));
+				}
+				searchVO.setListEc(list);
+				searchVO.setTotalCount(totalCount);
+					
+					
+					
+				 
+			} catch (IOException e) {
+				logger.error("SearchService  getEcDataByIndexType error===",e);
+			}
+	    	return searchVO;
+	 }
+
+	 /**
+	  * 
+	  * @describe pgc 下拉列表
+	  *
+	  * @author bowen_bao
+	  * @date 2017年3月7日
+	  * @param keyword：查询词    | pageNum：下拉的数量  | searchflag:0-web 1-app
+	  * @return
+	  */
+	public List<SearchEcObjVO> getPGCSelectList(String keyword,String searchflag,Integer pageNum){
+		
+		if(keyword==null ||  "".equals(keyword)){
+			return null;
+		}
+		
+		if(pageNum==null || 0==pageNum){
+			pageNum=1;
+		}
+		 
+		try {
+			BooleanQuery allQuery=new BooleanQuery(true);//全局总Query
+			
+			BooleanQuery blQuery=new BooleanQuery(true);//查询Query
+			
+			BooleanQuery showQuery=new BooleanQuery(true);//过滤Query
+			if("0".equals(searchflag)|| "3".equals(searchflag)){
+				Query webQ=queryUtil.getTermQuery("webShow","1");
+				showQuery.add(webQ,Occur.MUST);
+			}else if("1".equals(searchflag)||"2".equals(searchflag)){
+				Query appQ=queryUtil.getTermQuery("appShow","1");
+				showQuery.add(appQ,Occur.MUST);
+			}else{
+				Query webQ=queryUtil.getTermQuery("webShow","1");
+				showQuery.add(webQ,Occur.MUST);
+			}
+			 
+			BooleanQuery secretQuery=new BooleanQuery(true);//保密级别过滤Query
+			Query secretQ1=queryUtil.getTermQuery("secretLevel","1");
+			secretQuery.add(secretQ1,Occur.SHOULD);
+			Query secretQ2=queryUtil.getTermQuery("secretLevel","2");
+			secretQuery.add(secretQ2,Occur.SHOULD);
+			 
+			Query pgcQ=queryUtil.getTermQuery("indexType","3");
+			showQuery.add(pgcQ,Occur.MUST);
+			
+			Query titleQuery=queryUtil.getAttributeQuery("title", keyword, analyzerService.getIKAnalyzer(false));
+			if(titleQuery!=null){
+				blQuery.add(titleQuery, Occur.SHOULD);
+			}
+					
+			
+			if(showQuery.clauses().size()>0){
+				allQuery.add(showQuery, Occur.MUST);
+			}
+			allQuery.add(blQuery,Occur.MUST);
+			allQuery.add(secretQuery,Occur.MUST);
+			
+			IndexSearcher indexSearch=indexService.getIndexSearcher();
+			
+//			TopDocs topdocs=indexSearch.search(allQuery,SearchCoreConstant.QUESTIONPAGESIZE);
+//			int totalCount=topdocs.totalHits;
+//			ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+//			
+//			List<SearchEcObjVO> list=new ArrayList<SearchEcObjVO>();
+//			
+//			SearchEcObjVO vo;
+//			 Document document=null;
+//			for(int i=0;i<(SearchCoreConstant.QUESTIONPAGESIZE>totalCount?totalCount:SearchCoreConstant.QUESTIONPAGESIZE);i++){
+//					vo=new SearchEcObjVO();
+//					document=indexSearch.doc(scoreDoc[i].doc);
+//					vo.setTitle(document.get("title"));
+//					vo.setId(Integer.parseInt(document.get("questionid")));
+//					list.add(vo);
+//			}
+			
+			
+			
+			TopDocs topdocs=indexSearch.search(allQuery,SearchCoreConstant.QUESTIONPAGESIZE*pageNum);
+			int totalCount=topdocs.totalHits;
+			ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+			
+			List<SearchEcObjVO> list=new ArrayList<SearchEcObjVO>();
+			
+			SearchEcObjVO vo;
+			 Document document=null;
+			
+			
+			if(pageNum==1){
+				for(int i=0;i<(SearchCoreConstant.QUESTIONPAGESIZE>totalCount?totalCount:SearchCoreConstant.QUESTIONPAGESIZE);i++){
+						vo=new SearchEcObjVO();
+						document=indexSearch.doc(scoreDoc[i].doc);
+						vo.setTitle(document.get("title"));
+						vo.setId(Integer.parseInt(document.get("questionid")));
+						list.add(vo);
+				}
+			}else{
+				int nsize=0;
+				if(scoreDoc.length>=pageNum*SearchCoreConstant.QUESTIONPAGESIZE){
+					nsize=pageNum*SearchCoreConstant.QUESTIONPAGESIZE;
+				}else{
+					nsize=scoreDoc.length;
+				}
+				for(int i=(pageNum-1)*SearchCoreConstant.QUESTIONPAGESIZE;i<nsize;i++){
+					vo=new SearchEcObjVO();
+					document=indexSearch.doc(scoreDoc[i].doc);
+					vo.setTitle(document.get("title"));
+					vo.setId(Integer.parseInt(document.get("questionid")));
+					list.add(vo);
+				}
+			}
+			
+			
+//			TopDocs topdocs=indexSearch.search(allQuery,SearchConstant.QUESTIONPAGESIZE*pageNum);
+//			int totalCount=topdocs.totalHits;
+//			ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+//			
+//			List<QuestionVO> list=new ArrayList<QuestionVO>();
+//			
+//			
+//			//分页：
+//			if(pageNum==1){
+//				 QuestionVO vo;
+//				 Document document=null;
+//				for(int i=0;i<(SearchConstant.QUESTIONPAGESIZE>totalCount?totalCount:SearchConstant.QUESTIONPAGESIZE);i++){
+//						vo=new QuestionVO();
+//						document=indexSearch.doc(scoreDoc[i].doc);
+//						vo.setTitle(document.get("title"));
+//						vo.setId(Integer.parseInt(document.get("questionid")));
+//						list.add(vo);
+//				}
+//			}else{
+//				int nsize=0;
+//				if(scoreDoc.length>=pageNum*SearchConstant.QUESTIONPAGESIZE){
+//					nsize=pageNum*SearchConstant.QUESTIONPAGESIZE;
+//				}else{
+//					nsize=scoreDoc.length;
+//				}
+//				 QuestionVO vo;
+//				 Document document=null;
+//				for(int i=(pageNum-1)*SearchConstant.QUESTIONPAGESIZE;i<nsize;i++){
+//					vo=new QuestionVO();
+//					document=indexSearch.doc(scoreDoc[i].doc);
+//					vo.setTitle(document.get("title"));
+//					vo.setId(Integer.parseInt(document.get("questionid")));
+//					list.add(vo);
+//				}
+//			}
+//			
+//			
+			
+			return list;
+		 
+		} catch (Exception e) {
+			logger.error("SearchService getPGCSelectList error:"+e.getStackTrace());
+		}
+		 
+    	return null;
+	}
+	 
+	 
+	
+	 /**
+	  * 
+	  * @describe ON 获取 ec_doc List
+	  *
+	  * @author bowen_bao
+	  * @date 2018年3月13日
+	  * @param keyword：查询词     
+	  * @return
+	  */
+	public List<ONEcDocVO> getONEcdocList(String keyword,Integer pageNum,Integer pageSize){
+		
+		if(keyword==null ||  "".equals(keyword)){
+			return null;
+		}
+		
+		if(pageNum==null || 0==pageNum){
+			pageNum=1;
+		}
+		
+		if(pageSize==null || 0==pageSize) {
+			pageSize=10;
+		}
+		 
+		try {
+			BooleanQuery allQuery=new BooleanQuery(true);//全局总Query
+			
+			BooleanQuery blQuery=new BooleanQuery(true);//查询Query
+			
+			BooleanQuery showQuery=new BooleanQuery(true);//过滤Query
+			 
+			Query docQ=queryUtil.getTermQuery("indexType","2");
+			showQuery.add(docQ,Occur.MUST);
+			
+			Query titleQuery=queryUtil.getAttributeQuery("title", keyword, analyzerService.getCommaAnalyzer());
+			if(titleQuery!=null){
+				blQuery.add(titleQuery, Occur.SHOULD);
+			}
+			Query summaryQuery=queryUtil.getAttributeQuery("summary", keyword, analyzerService.getCommaAnalyzer());
+			if(summaryQuery!=null){
+				blQuery.add(summaryQuery, Occur.SHOULD);
+			}
+			Query detailQuery=queryUtil.getAttributeQuery("detail", keyword, analyzerService.getCommaAnalyzer());
+			if(detailQuery!=null){
+				blQuery.add(detailQuery, Occur.SHOULD);
+			}
+			Query keywordQuery=queryUtil.getAttributeQuery("keyword", keyword, analyzerService.getCommaAnalyzer());
+			if(keywordQuery!=null){
+				blQuery.add(keywordQuery, Occur.SHOULD);
+			}
+			
+			Query subTypeQuery=queryUtil.getAttributeQuery("subType", "数据手册", analyzerService.getCommaAnalyzer());
+			subTypeQuery.setBoost(9999.0f);
+			if(subTypeQuery!=null){
+				allQuery.add(subTypeQuery, Occur.SHOULD);
+			}
+					
+			
+			allQuery.add(showQuery, Occur.MUST);
+			allQuery.add(blQuery,Occur.MUST);
+			
+			TopDocs topdocs=indexService.getIndexSearcher().search(allQuery, pageNum*pageSize);
+			int totalCount=topdocs.totalHits;
+			ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+			List<ONEcDocVO> list=new ArrayList<ONEcDocVO>();
+			for(int i=(pageNum-1)*pageSize;i<(pageNum*pageSize>totalCount?totalCount:pageNum*pageSize);i++){
+				//带有sort排序，获取文档分组的情况
+				list.add(documentToONEcDocVO(indexService.getIndexSearcher().doc(scoreDoc[i].doc),scoreDoc[i].score,totalCount));//只获取总文档分值
+			}
+			return list;
+		} catch (Exception e) {
+			logger.error("SearchService getONEcdocList error:"+e.getStackTrace());
+		}
+		return null;
+	}
+	
+	public List<EcData> testGetDoc(String indexType,Integer id){
+		
+		List<EcData> list=new ArrayList<EcData>();
+		
+    	BooleanQuery query=new BooleanQuery();
+     
+    		Query indextypeQ1=queryUtil.getTermQuery("indexType",indexType);
+    		query.add(indextypeQ1,Occur.MUST);
+    		
+    		if("1".equals(indexType)){
+    			Query ecNewididQ=NumericRangeQuery.newIntRange("ecNewid", id, id, true, true);
+        		query.add(ecNewididQ,Occur.MUST);
+    		}else if("2".equals(indexType)){
+    			Query ecDocidQ=NumericRangeQuery.newIntRange("ecDocid", id, id, true, true);
+        		query.add(ecDocidQ,Occur.MUST);
+    		}else if("3".equals(indexType)){
+    			Query ecDocidQ=NumericRangeQuery.newIntRange("questionid", id, id, true, true);
+        		query.add(ecDocidQ,Occur.MUST);
+    		}else if("6".equals(indexType)){
+    			Query ecDocidQ=NumericRangeQuery.newIntRange("id", id, id, true, true);
+        		query.add(ecDocidQ,Occur.MUST);
+    		}
+		
+		TopDocs topdocs;
+		try {
+			topdocs = indexService.getIndexSearcher().search(query, 1);
+			ScoreDoc[] scoreDocs=topdocs.scoreDocs;
+			for(int i=0;i<scoreDocs.length;i++){
+				EcData obj;
+				int doc=scoreDocs[i].doc;
+				Document document=indexService.getIndexSearcher().doc(doc);
+				obj=documentToEcDetailData(document);
+				list.add(obj);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+		return list;
+	}
+	
+	
+	
+	
+public List<SearchEcObjVO> testGetDoc(String text,String indexType,Integer id1,Integer id2){
+	
+	SearchParam searchDI=new SearchParam();
+	searchDI.setQ(text);
+	searchDI.setIndexType(indexType);
+	searchDI.setDataOffset(1000);
+	
+	if(searchDI==null || StringUtils.isEmpty(searchDI.getQ())){
+		return null;
+	}
+	initSearchDI(searchDI);//完善搜索参数
+	List<String> subTypeList=new ArrayList<String>();
+	List<SearchEcObjVO> list=null;
+	//根据q获取搜索的场景
+	SearchVO searchVO=new SearchVO();
+//	SearchRule sceneRule=ecCacheService.getSceneRuleByQ(searchDI,searchVO);
+	SearchRule sceneRule=searchSceneService.getSearchRule(searchDI,searchVO);
+	logger.info("SceneCode()==========="+sceneRule.getSceneCode());
+	
+	
+	if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())){
+		
+		//扩展同义词     只在厂牌场景扩展搜索词
+		String extendQ=analyzerService.expandQ(searchDI.getQ());
+		if(StringUtils.isNotEmpty(extendQ)){
+			searchDI.setQ(searchDI.getQ()+" "+extendQ);
+		}
+		logger.info("extendQ()==========="+searchDI.getQ());
+
+		//只有在厂牌有空格的时候，扩展空格 -
+		if(searchDI.getQ().contains(" ")){
+			searchDI.setQ(searchDI.getQ()+","+searchDI.getQ().replace(" ", "-"));
+		}
+	}
+	
+	
+	//根据场景
+	List<Query> queryList=searchBySearchRuleV3(sceneRule,searchDI);
+	
+	Sort sort=new Sort();
+	SortField[] sortFields= sortUtil.getEcSort();
+	sort.setSort(sortFields);
+	try {
+		
+		TopDocs topdocs=indexService.getIndexSearcher().search(queryList.get(0), searchDI.getDataNum()+searchDI.getDataOffset(),sort);
+
+		
+			int totalCount=topdocs.totalHits;
+			ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+			list=new ArrayList<SearchEcObjVO>();
+			for(int i=0;i<(searchDI.getDataNum()+searchDI.getDataOffset()>totalCount?totalCount:searchDI.getDataNum()+searchDI.getDataOffset());i++){
+				
+				Document doc=indexService.getIndexSearcher().doc(scoreDoc[i].doc);
+//				if(Integer.parseInt(doc.get("id"))==id1){
+				if(id1.equals(Integer.parseInt(doc.get("id")))){
+					Explanation explanation=indexService.getIndexSearcher().explain(queryList.get(0), scoreDoc[i].doc);
+					
+					list.add(documentToEcScore(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							(Float)((FieldDoc)scoreDoc[i]).fields[0],explanation.toString()));//文档分值详情
+				}
+				
+				if(id2.equals(Integer.parseInt(doc.get("id")))){
+					Explanation explanation=indexService.getIndexSearcher().explain(queryList.get(0), scoreDoc[i].doc);
+					
+					list.add(documentToEcScore(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							(Float)((FieldDoc)scoreDoc[i]).fields[0],explanation.toString()));//文档分值详情
+				}
+				
+			}
+			
+			return list;
+	} catch (Exception e) {
+		logger.error("SearchService.search error:"+e.getStackTrace());
+	}
+	
+	return null;
+	
+	}
+
+
+	/**
+	 * 提供后台搜索分析:怎么分词,走那种场景
+	 * @param q
+	 * @return
+	 */
+	public String testSemSearch(String q){
+		String str="";
+		q=q.toLowerCase();
+		SearchParam searchDI=new SearchParam();
+		searchDI.setQ(q);
+		searchDI.setSearchFlag("1");
+		searchDI.setIndexType("1");
+		searchDI.setSecretLevel("4,1,2,3,5");
+		searchDI.setTouristFlag("0");
+		
+		initSearchDI(searchDI);//完善搜索参数
+		SearchVO searchVO=new SearchVO();
+		//根据q获取搜索的场景
+//		SearchRule sceneRule=ecCacheService.getSceneRuleByQ(searchDI,searchVO);
+		SearchRule sceneRule=searchSceneService.getSearchRule(searchDI,searchVO);
+		str="场景code:"+sceneRule.getSceneCode()+"|传入搜索词为:"+searchDI.getQ();
+		
+			List<Matchs> list= sekAnalyzerService.getSekScene(q);
+			if(list!=null && list.size()>0) {
+				str+="|  List<Matchs> size= "+list.size();
+				for(Matchs matchs:list) {
+					str+=" | " +matchs.getFinalString()+"---"+matchs.getUnitType();
+				}
+			}
+			
+			if(sceneRule.getSceneCode()==1004) {
+				List<String> listPn=ecDataService.getPnExpandWord(searchDI.getQ());
+				if(listPn!=null && listPn.size()>0) {
+					str+=" |  pn带出来5个分别为:";
+					for(String s:listPn) {
+						str+="|"+s;
+					}
+				}
+			}
+			
+			
+			
+		return str;
+	}
+	
+	
+	
+	/**
+	 * 测试专用
+	 * @param testSearchDI
+	 * @return
+	 */
+	public TestSearchVO searchTest(TestSearchDI testSearchDI) { 
+		
+		logger.info("TestSearchVO  start  *****");
+		
+		TestSearchVO testSearchVO=new TestSearchVO();
+		
+		if(testSearchDI==null || StringUtils.isEmpty(testSearchDI.getQ())){
+			return null;
+		}
+		 
+		testSearchVO.setQ(testSearchDI.getQ());
+		testSearchVO.setOldQ(testSearchDI.getQ());
+		if(StringUtils.isEmpty(testSearchDI.getSecretLevel())){
+			testSearchDI.setSecretLevel("1");
+		}
+		
+		if(StringUtils.isEmpty(testSearchDI.getTouristFlag())){
+			testSearchDI.setTouristFlag("0");
+		}
+		
+		
+		if(StringUtils.isEmpty(testSearchDI.getIndexType())){
+			testSearchDI.setIndexType("0");
+		}
+		
+		List<String> subTypeList=new ArrayList<String>();
+		List<TestSearchEcObjVO> list=null;
+		testSearchVO.setSceneWord(testSearchDI.getQ().toLowerCase());//由于搜索系统需要扩词,需要保留原词给前台做场景词判断
+		testSearchDI.setQ(testSearchDI.getQ().toLowerCase());//转小写
+		//根据q获取搜索的场景
+		SearchRule sceneRule=searchSceneService.getSearchRule(testSearchDI,null);
+		testSearchVO.setSceneCode(sceneRule.getSceneCode());
+		
+		if(SearchCoreConstant.SCENE_BRAND_CODE.equals(sceneRule.getSceneCode())){//厂牌场景
+			
+			//只有厂牌场景， 传一个系统分词之后的厂牌给前台
+			List<Matchs> listMatchs= sekAnalyzerService.getSekScene(testSearchDI.getQ());
+			if(listMatchs!=null && listMatchs.size()>0){
+				testSearchVO.setSceneWord(listMatchs.get(0).getFinalString());
+			}
+			
+			//扩展同义词     只在厂牌场景扩展搜索词
+			String extendQ=ecCacheService.getBrandNameByAlia(testSearchDI.getQ());
+			if(StringUtils.isNotEmpty(extendQ)){
+				testSearchDI.setQ(testSearchDI.getQ()+" "+extendQ);
+			}
+			//只有在厂牌有空格的时候，扩展空格 -     
+			if(testSearchDI.getQ().contains(" ")){
+				testSearchDI.setQ(testSearchDI.getQ()+","+testSearchDI.getQ().replace(" ", "-"));
+			}
+		}
+		
+		
+		if(sceneRule.getSceneCode()==SearchCoreConstant.SCENE_BRAND_CODE||
+				sceneRule.getSceneCode()==SearchCoreConstant.SCENE_GOODS_CODE||
+				sceneRule.getSceneCode()==SearchCoreConstant.SCENE_ELEC_CODE||
+				sceneRule.getSceneCode()==SearchCoreConstant.SCENE_PNPLS_CODE) {
+			
+			
+			List<Matchs> listMatchs= sekAnalyzerService.getSekScene(testSearchVO.getOldQ());
+			Set<Integer> unitTypeSet=new HashSet<Integer>();
+			String sysAnalyzer="";
+			for(Matchs m:listMatchs) {
+				System.out.println("*****"+m.getUnitType()+"*******"+m.getFinalString());
+				sysAnalyzer+="|"+m.getUnitType()+"*******"+m.getFinalString();
+			}
+			testSearchVO.setSysAnalyzer(sysAnalyzer);
+			
+		}
+		
+		//根据场景
+		SekQuery sekQuery=searchBySearchRule(sceneRule,testSearchDI);
+		
+		Sort sort=new Sort();
+		SortField[] sortFields= sortUtil.getEcSort();
+		sort.setSort(sortFields);
+		
+		
+		try {
+			TopDocs topdocs=indexService.getIndexSearcher().search(sekQuery.getQuery(),sekQuery.getFilter(), testSearchDI.getDataNum()+testSearchDI.getDataOffset(),sort);
+			
+				int totalCount=topdocs.totalHits;
+				ScoreDoc[] scoreDoc=topdocs.scoreDocs;
+				list=new ArrayList<TestSearchEcObjVO>();
+				for(int i=testSearchDI.getDataNum();i<(testSearchDI.getDataNum()+testSearchDI.getDataOffset()>totalCount?totalCount:testSearchDI.getDataNum()+testSearchDI.getDataOffset());i++){
+					//带有sort排序，获取文档分组的情况
+					list.add(documentToEcData(indexService.getIndexSearcher().doc(scoreDoc[i].doc),
+							testSearchDI.getSearchFlag(),(Float)((FieldDoc)scoreDoc[i]).fields[0],""));//只获取总文档分值
+				}
+				testSearchVO.setSubTypeList(subTypeList);
+				testSearchVO.setResults(list);
+				testSearchVO.setTotalCount(totalCount);
+		} catch (Exception e) {
+			logger.error("SearchService.search error:"+e.getStackTrace());
+		}
+		
+		return testSearchVO;
+	}
+	
+	
+	
+	
+	 
+}

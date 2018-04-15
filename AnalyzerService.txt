@@ -1,0 +1,424 @@
+package com.sekorm.core.service;
+
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.apache.commons.lang.StringUtils;
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.wltea.analyzer.cfg.Configuration;
+import org.wltea.analyzer.dic.Dictionary;
+import org.wltea.analyzer.lucene.IKAnalyzer;
+import com.alibaba.dubbo.config.annotation.Reference;
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.util.PatternAnalyzer;
+import com.sekorm.core.vo.IndexRule;
+import com.sekorm.dubbo.ecm.declare.isearch.AnalyzerDubbo;
+
+
+/**
+ * 
+ * @describe  分词器服务类  ,分词器的具体实现类
+ *
+ * @author bowen_bao
+ * @date 2017年1月19日
+ */
+@Service
+public class AnalyzerService {
+	
+	private static Logger logger = LoggerFactory.getLogger(AnalyzerService.class);
+
+	private Analyzer ik_smalls_Analyzer=null;		//ik 细粒分词器
+	private Analyzer ik_no_smalls_Analyzer=null;	//ik 智能分词器
+	private Analyzer sek_comma_Analyzer=null;		//逗号分词器
+	
+	private PerFieldAnalyzerWrapper perFieldAnalyzerWrapper=null;//Analyzer 组，indexWriter 必须的
+	
+	@Autowired
+	private EcCacheService ecCacheService;
+	
+	@Reference
+	private AnalyzerDubbo analyzerDubbo;
+	
+	
+	/**
+	 * 
+	 * @describe 获取IK分词器
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月19日
+	 * @param isSmalls:True-智能切分  Flase-细粒切分
+	 * @return
+	 */
+	public Analyzer getIKAnalyzer(boolean isNotSmalls){
+		if(isNotSmalls){
+			if(ik_no_smalls_Analyzer!=null){
+				return ik_no_smalls_Analyzer;
+			}else{
+				addIKWords(ecCacheService.getIKWordsList(),null);
+				ik_no_smalls_Analyzer=new IKAnalyzer(true);
+				
+				logger.info("new IKAnalyzer(true)");
+				return ik_no_smalls_Analyzer;
+			}
+		}else{
+			if(ik_smalls_Analyzer!=null){
+				return ik_smalls_Analyzer;
+			}else{
+				addIKWords(ecCacheService.getIKWordsList(),null);
+				ik_smalls_Analyzer=new IKAnalyzer();
+				logger.info("new IKAnalyzer()");
+				return ik_smalls_Analyzer;
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * @describe 获取逗号分词器
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月22日
+	 * @param
+	 * @return
+	 */
+	public Analyzer getCommaAnalyzer(){
+		if(sek_comma_Analyzer!=null){
+			return sek_comma_Analyzer;
+		}else{
+			sek_comma_Analyzer=getPatternAnalyzer(",");
+			return sek_comma_Analyzer;
+		}
+	}
+	
+	/**
+	 * 
+	 * @describe 自定义正则分词器
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月19日
+	 * @param 用arg来切割
+	 * @return
+	 */
+	private Analyzer getPatternAnalyzer(String arg){
+				return  new PatternAnalyzer(arg);
+	}
+	
+	
+	
+	/**
+	 * 
+	 * @describe IK词库初始化,添加行业词和停用词  
+	 *           每天晚上建立全量索引时出发
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月23日
+	 * @param
+	 * @return
+	 */
+	public void addIKWords(Set<String> addWordlist,Set<String> addDisableWordList){
+		Dictionary.clear();	//ik修改后的包提供
+		Configuration cfg=org.wltea.analyzer.cfg.DefaultConfig.getInstance();
+		cfg.setUseSmart(true);
+		Dictionary.initial(cfg);
+		Dictionary dictionary=Dictionary.getSingleton();//词典是全局的,IK 只是在词典之上的一个实例
+		if(addWordlist!=null){
+			dictionary.addWords(addWordlist);
+		}
+		if(addDisableWordList!=null){
+			dictionary.disableWords(addDisableWordList);	
+		}
+	}
+	
+	
+	/**
+	 * 
+	 * @describe 测试分词器效果
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月22日
+	 * @param keyword：搜索词   analyzer：分词器
+	 * @return 分词效果
+	 */
+	public String testAnalyzer(String keyword,Analyzer anal){
+		
+		StringBuilder str=new StringBuilder();
+		StringReader reader=new StringReader(keyword);
+		TokenStream ts=null;
+		try {
+				ts=anal.tokenStream("", reader);
+				CharTermAttribute term=ts.getAttribute(CharTermAttribute.class);
+				ts.reset();
+				while(ts.incrementToken()){
+					str.append(term.toString()+"|");
+				}
+		    ts.end();//必须加上此方法，reader.close() 才不会报close() missing
+//			anal.close();如果是new的Analyzer,就必须要关闭
+		} catch (IOException e) {
+			logger.error("AnalyzerService testAnalyzer error:",e);
+		}finally{
+			if(ts!=null){
+				try {
+					ts.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			reader.close();
+		}
+		return str.toString();
+	}
+	
+	
+	/**
+	 * 
+	 * @describe 测试分词器效果
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月22日
+	 * @param keyword：搜索词   analyzer：分词器
+	 * @return 分词效果
+	 */
+	public String testAnalyzerByCode(String keyword,Integer analCode){
+		Analyzer anal=getAnalyzerByAnalyzerCode(analCode);
+		StringBuilder str=new StringBuilder();
+		StringReader reader=new StringReader(keyword);
+		TokenStream ts=null;
+		try {
+				ts=anal.tokenStream("", reader);
+				CharTermAttribute term=ts.getAttribute(CharTermAttribute.class);
+				ts.reset();
+				while(ts.incrementToken()){
+					str.append(term.toString()+"|");
+				}
+				ts.end();//必须加上此方法，reader.close() 才不会报close() missing
+		} catch (IOException e) {
+			logger.error("AnalyzerService testAnalyzer error:",e);
+		}finally{
+			if(ts!=null){
+				try {
+					ts.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			reader.close();
+		}
+		return str.toString();
+	}
+	
+	/**
+	 * 
+	 * @describe  提供后台系统做敏感词判断使用，默认IK系列度
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月21日
+	 * @param
+	 * @return
+	 */
+	public List<String> ikAnalyzerQ(String q){
+	    	
+	    	List<String> list=new ArrayList<String>();
+	    	String text=q;
+			Analyzer anal=getIKAnalyzer(false);
+			StringReader reader=new StringReader(text);
+			TokenStream ts=null;
+			try {
+				if(text.length()>1){
+					ts=anal.tokenStream("", reader);
+					CharTermAttribute term=ts.getAttribute(CharTermAttribute.class);
+					ts.reset();
+					while(ts.incrementToken()){
+						list.add(term.toString());
+					}
+					ts.end();
+				}else{
+					list.add(text);
+				}
+				
+			} catch (IOException e) {
+				logger.error("AnalyzerService IKAnalyzerQ error:",e);
+			}finally{
+				if(ts!=null){
+					try {
+						ts.close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+				reader.close();
+			}
+	    	return list;
+	    }
+	
+	
+	
+	
+	public List<String> ikAnalyzerQ(String text,Analyzer anal){
+    	
+    	List<String> list=new ArrayList<String>();
+		StringReader reader=new StringReader(text);
+		TokenStream ts=null;
+		try {
+			if(text.length()>1){
+				ts=anal.tokenStream("", reader);
+				CharTermAttribute term=ts.getAttribute(CharTermAttribute.class);
+				ts.reset();
+				while(ts.incrementToken()){
+					list.add(term.toString());
+				}
+				ts.end();
+			}else{
+				list.add(text);
+			}
+			
+		} catch (IOException e) {
+			logger.error("AnalyzerService IKAnalyzerQ(String text,Analyzer anal) error:",e);
+		}finally{
+			if(ts!=null){
+				try {
+					ts.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			reader.close();
+		}
+    	return list;
+    }
+	
+	
+	
+	
+	
+	
+	/**
+	 * 
+	 * @describe 根据创建索引规则获取 创建IndexWriter的分词组
+	 *
+	 * @author bowen_bao
+	 * @date 2017年1月24日
+	 * @param
+	 * @return
+	 */
+	public PerFieldAnalyzerWrapper getPerFieldAnalyzerWrapper(){
+		
+		if(perFieldAnalyzerWrapper==null){
+			Analyzer  defaultAnalyzer=getIKAnalyzer(false);//系统默认是细粒度分
+			
+			IndexRule rule=ecCacheService.getIndexRule();
+			Map<String,Analyzer> fieldAnalyzers=initFieldAnalyzersByRule(rule);
+			
+			perFieldAnalyzerWrapper=new PerFieldAnalyzerWrapper(defaultAnalyzer,fieldAnalyzers);
+			
+			return perFieldAnalyzerWrapper;
+		}else{
+			return perFieldAnalyzerWrapper;
+		}
+		
+	}
+	
+	
+	/**
+	 * 
+	 * @describe 封装域分词器{1-默认IK细粒分  2-逗号分}
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	private Map<String,Analyzer>  initFieldAnalyzersByRule (IndexRule rule){
+		
+		Analyzer  patternAnalyzer=getCommaAnalyzer();
+		
+		Map<String,Analyzer> fieldAnalyzers=new HashMap<String,Analyzer>();
+
+		Set<String> keySet=  rule.getAttributeSplit().keySet();
+		
+		for(String s:keySet){
+			if(SearchCoreConstant.ANALYZER_COMMA_CODE.equals(rule.getAttributeSplit().get(s))){
+				fieldAnalyzers.put(s, patternAnalyzer);
+			}
+		}
+		return fieldAnalyzers;
+	}
+	
+	
+	
+	/**
+	 * 
+	 * @describe 根据analyzerCode 获得Analyzer
+	 *
+	 * @author bowen_bao
+	 * @date 2017年2月11日
+	 * @param
+	 * @return
+	 */
+	public Analyzer getAnalyzerByAnalyzerCode(Integer code){
+		if(code.equals(SearchCoreConstant.ANALYZER_IK_SMALL_CODE)){
+			return getIKAnalyzer(false);
+		}else if(code.equals(SearchCoreConstant.ANALYZER_IK_NO_SMALL_CODE)){
+			return getIKAnalyzer(true);
+		}else if(code.equals(SearchCoreConstant.ANALYZER_COMMA_CODE)){
+			return getCommaAnalyzer();
+		}
+		else{
+//			return getIKAnalyzer(false);
+			return null;
+		}
+	}
+	
+	
+	public String expandQ(String text){
+		
+		StringBuffer sb=new StringBuffer();
+		Analyzer anal=getIKAnalyzer(false);
+		StringReader reader=new StringReader(text);
+		TokenStream ts=null;
+		try {
+			if(text.length()>1){
+				ts=anal.tokenStream("", reader);
+				CharTermAttribute term=ts.getAttribute(CharTermAttribute.class);
+				ts.reset();
+				while(ts.incrementToken()){
+					String str=ecCacheService.getBrandNameByAlia(term.toString());
+					if(StringUtils.isNotEmpty(str)){
+						sb.append(str+" ");
+					}
+				}
+				ts.end();
+			}else{
+				String str=ecCacheService.getBrandNameByAlia(text);
+				if(StringUtils.isNotEmpty(str)){
+					return str;
+				}
+			}
+			
+		} catch (IOException e) {
+			logger.error("AnalyzerService IKAnalyzerQ error:",e);
+		}finally{
+			if(ts!=null){
+				try {
+					ts.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			reader.close();
+		}
+    	
+		return sb.toString();
+	}
+	
+}
