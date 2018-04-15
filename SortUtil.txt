@@ -1,0 +1,48 @@
+package com.sekorm.core.util;
+
+import org.apache.lucene.search.SortField;
+import org.springframework.stereotype.Component;
+
+/**
+ * 根据业务或其排序规则
+ * 
+ * @author bowen_bao
+ * 
+ */
+@Component("sortUtil")
+public class SortUtil {
+
+
+	public SortField[] getEcSort() {
+
+
+		// Time sort
+		SortField publishtimeSort = new SortField("longpublishTime",
+				SortField.Type.LONG, true);
+
+		// SortField.FIELD_SCORE 文档得分
+		SortField[] ecSort = new SortField[] { 
+				SortField.FIELD_SCORE, publishtimeSort };
+
+		return ecSort;
+
+	}
+	
+	
+	public SortField[] getScoreSort() {
+
+
+
+		// SortField.FIELD_SCORE 文档得分
+		SortField[] scoreSort = new SortField[] { 
+				SortField.FIELD_SCORE  };
+
+		return scoreSort;
+
+	}
+	
+	
+	
+
+
+}

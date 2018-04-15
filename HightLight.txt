@@ -1,0 +1,285 @@
+package com.sekorm.core.util;
+
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.PhraseQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.highlight.Highlighter;
+import org.apache.lucene.search.highlight.NullFragmenter;
+import org.apache.lucene.search.highlight.QueryScorer;
+import org.apache.lucene.search.highlight.SimpleHTMLFormatter;
+import org.springframework.stereotype.Component;
+import org.wltea.analyzer.lucene.IKAnalyzer;
+
+import com.sekorm.core.common.SearchCoreConstant;
+import com.sekorm.core.vo.SearchEcObjVO;
+import com.sekorm.core.vo.SearchVO;
+
+
+@Component("ikHightLight")
+public class HightLight {
+	
+	// 搜索高亮标签
+//	public static final String HIGHLIGHT_BEGIN =   SearchCoreConstant.HIGHLIGHT_BEGIN; // 高亮开始标记符    
+//	public static final String HIGHLIGHT_END = SearchCoreConstant.HIGHLIGHT_END; // 高亮结束标记符
+	
+
+	public static void main(String[] args) {
+	}
+	
+	public static  void sekormv0high(SearchVO vo,String q,String searchFlag){
+
+		// ik分词，分出来标红
+		IKAnalyzer ikAnalyzer = new IKAnalyzer();
+		List<String> ikTokenList = getTokenList(q, ikAnalyzer);
+		for (String token : ikTokenList) {
+			System.out.println(token);
+		}
+
+		// 构造高亮查询
+		BooleanQuery highLightQuery = new BooleanQuery();
+//		PatternAnalyzer patternAnalyzer = new PatternAnalyzer(""); // 单字符分词
+		for (String token : ikTokenList) {
+			Query phraseQuery = getPhraseQuery("title", token, ikAnalyzer);
+			highLightQuery.add(phraseQuery, BooleanClause.Occur.SHOULD);
+		}
+
+		// 高亮标题
+		for(SearchEcObjVO ecnew:vo.getListEc()){//只高亮title  summery
+			ecnew.setTitle(highLight(ecnew.getTitle(),highLightQuery,ikAnalyzer,searchFlag));
+//			ecnew.setSummary(highLight(ecnew.getSummary(),highLightQuery,ikAnalyzer));
+		}
+		 
+	}
+	
+	public   void sekormv3high(List<SearchEcObjVO> list,String q,Analyzer qTitleanalyzer,Analyzer qSummeryanalyzer,
+			Analyzer titleanalyzer,Analyzer summeryanalyzer,String searchFlag){
+		 
+		List<String> titleQTokenList = getTokenList(q, qTitleanalyzer);
+		
+		List<String> summerQTokenList = getTokenList(q, qSummeryanalyzer);
+		
+		// 构造高亮查询
+		BooleanQuery highLightQuery = new BooleanQuery();
+		
+		for (String token : titleQTokenList) {
+			Query titleQuery = getPhraseQuery("title", token, titleanalyzer);
+			highLightQuery.add(titleQuery, BooleanClause.Occur.SHOULD);
+		}
+		
+		for (String token : summerQTokenList) {
+			Query summeryQuery = getPhraseQuery("summery", token, summeryanalyzer);
+			highLightQuery.add(summeryQuery, BooleanClause.Occur.SHOULD);
+		}
+
+		// 高亮标题
+		for(SearchEcObjVO obj:list){//只高亮title  summery
+			obj.setTitle(highLight(obj.getTitle(),highLightQuery,titleanalyzer,searchFlag));
+			obj.setSummary(highLight(obj.getSummary(),highLightQuery,summeryanalyzer,searchFlag));
+		}
+		 
+	}
+	
+	public   void sekormv3high_update(List<SearchEcObjVO> list,String q,Analyzer analyzer ,String searchFlag){
+		 
+		// ik分词，分出来标红
+				IKAnalyzer ikAnalyzer = new IKAnalyzer();
+				List<String> ikTokenList = getTokenList(q, ikAnalyzer);
+				for (String token : ikTokenList) {
+					System.out.println(token);
+				}
+
+				// 构造高亮查询
+				BooleanQuery highLightQuery = new BooleanQuery();
+				PatternAnalyzer patternAnalyzer = new PatternAnalyzer(""); // 单字符分词
+				for (String token : ikTokenList) {
+					Query titleQuery = getPhraseQuery("title", token, patternAnalyzer);
+//					Query summeryQuery = getPhraseQuery("summery", token, patternAnalyzer);
+					highLightQuery.add(titleQuery, BooleanClause.Occur.SHOULD);
+//					highLightQuery.add(summeryQuery, BooleanClause.Occur.SHOULD);
+				}
+
+				
+				// 高亮标题
+				for(SearchEcObjVO ecnew:list){//只高亮title  summery
+					ecnew.setTitle(highLight(ecnew.getTitle(),highLightQuery,patternAnalyzer,searchFlag));
+					ecnew.setSummary(highLight(ecnew.getSummary(),highLightQuery,patternAnalyzer,searchFlag));
+				}
+		 
+	}
+	
+	
+	
+	public static   void sekormhigh(List<SearchEcObjVO> list,String keyword,String searchFlag,Analyzer analyzer){
+
+		List<String> ikTokenList = getTokenList(keyword, analyzer);
+
+		// 构造高亮查询
+		BooleanQuery highLightQuery = new BooleanQuery();
+		for (String token : ikTokenList) {
+			if(token.length()>=SearchCoreConstant.HIGHLIGHT_LONG_SIZE) {
+				Query titleQuery = getPhraseQuery("title", token, analyzer);
+				highLightQuery.add(titleQuery, BooleanClause.Occur.SHOULD);
+				
+				Query summaryQuery = getPhraseQuery("summary", token, analyzer);
+				highLightQuery.add(summaryQuery, BooleanClause.Occur.SHOULD);
+			}
+		}
+
+		// 高亮标题
+		for(SearchEcObjVO ecnew:list){//只高亮title  summery
+			ecnew.setTitle(highLight(ecnew.getTitle(),highLightQuery,analyzer,searchFlag));
+			ecnew.setSummary(highLight(ecnew.getSummary(),highLightQuery,analyzer,searchFlag));
+		}
+		 
+	}
+	
+	
+	
+
+	public static String highLight(String title, Query query, Analyzer analyzer,String searchFlag) {
+		// 高亮器
+		SimpleHTMLFormatter simpleHTMLFormatter =null;
+		if(searchFlag.equals("0")){
+			simpleHTMLFormatter=new SimpleHTMLFormatter(SearchCoreConstant.HIGHLIGHT_BEGIN_WEB, SearchCoreConstant.HIGHLIGHT_END_WEB);
+		}else if(searchFlag.equals("1")){
+			simpleHTMLFormatter=new SimpleHTMLFormatter(SearchCoreConstant.HIGHLIGHT_BEGIN_ANDROID, SearchCoreConstant.HIGHLIGHT_END_ANDROID);
+		}else if(searchFlag.equals("2")){
+			simpleHTMLFormatter=new SimpleHTMLFormatter(SearchCoreConstant.HIGHLIGHT_BEGIN_IOS, SearchCoreConstant.HIGHLIGHT_END_IOS);
+		}
+		
+		Highlighter highlighter = new Highlighter(simpleHTMLFormatter,
+				new QueryScorer(query));
+		highlighter.setTextFragmenter(new NullFragmenter());
+
+		// 高亮标题
+		String hTitle = highLight(title, highlighter, analyzer,searchFlag);
+		return hTitle;
+	}
+
+	/**
+	 * 高亮文本
+	 * 
+	 * @param text
+	 * @param highlighter
+	 * @param analyzer
+	 * @return 失败：null
+	 */
+	public static String highLight(String text, Highlighter highlighter,
+			Analyzer analyzer,String searchFlag) {
+		if (text == null || text.length() == 0) {
+			return text;
+		}
+
+		try {
+			String hlText = highlighter.getBestFragment(analyzer, null, text);
+			if (hlText != null) {
+				// 合并连续命中区域
+				if(searchFlag.equals("0")){
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_WEB + SearchCoreConstant.HIGHLIGHT_BEGIN_WEB, ""); // 中文文本存在此情况
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_WEB + " " + SearchCoreConstant.HIGHLIGHT_BEGIN_WEB," "); // 英文文本存在此情况
+				}else if(searchFlag.equals("1")){
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_ANDROID + SearchCoreConstant.HIGHLIGHT_BEGIN_ANDROID, ""); // 中文文本存在此情况
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_ANDROID + " " + SearchCoreConstant.HIGHLIGHT_BEGIN_ANDROID," "); // 英文文本存在此情况
+				}else if(searchFlag.equals("2")){
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_IOS + SearchCoreConstant.HIGHLIGHT_BEGIN_IOS, ""); // 中文文本存在此情况
+					hlText = hlText.replace(SearchCoreConstant.HIGHLIGHT_END_IOS + " " + SearchCoreConstant.HIGHLIGHT_BEGIN_IOS," "); // 英文文本存在此情况
+				}
+				
+				
+				return hlText;
+			} else {
+				return text;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return text;
+	}
+
+	/**
+	 * 返回分词后的词列表
+	 * 
+	 * @param text
+	 * @param analyzer
+	 * @return 失败：返回空List
+	 */
+	public static List<String> getTokenList(String text, Analyzer analyzer) {
+		if (null == text || text.trim().isEmpty() || null == analyzer) {
+			return new ArrayList<String>();
+		}
+
+		List<String> list = new ArrayList<String>();
+
+		TokenStream ts = null;// 获取Lucene的TokenStream对象
+		try {
+			ts = analyzer.tokenStream(null, new StringReader(text));
+			CharTermAttribute term = ts.addAttribute(CharTermAttribute.class);// 获取词元文本属性
+			ts.reset(); // 重置TokenStream（重置StringReader）
+			while (ts.incrementToken()) {// 迭代获取分词结果
+				list.add(term.toString());
+			}
+			ts.end(); // Perform end-of-stream operations, e.g. set the final
+						// offset.
+		} catch (IOException e) {
+			e.printStackTrace();
+		} finally {
+			if (ts != null) {// 释放TokenStream的所有资源
+				try {
+					ts.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+
+		return list;
+	}
+
+	/**
+	 * 构造短语查询
+	 * 
+	 * @param field
+	 * @param keyword
+	 * @param analyzer
+	 * @return 失败：null
+	 */
+	public static PhraseQuery getPhraseQuery(String field, String keyword,
+			Analyzer analyzer) {
+		if (keyword == null || keyword.length() == 0) {
+			return null;
+		}
+
+		try {
+			// 得到分词词条
+			List<String> wordList = getTokenList(keyword, analyzer);
+			if (wordList.size() == 0) {
+				return null;
+			}
+			// 构造短语查询
+			PhraseQuery phraseQuery = new PhraseQuery();
+			for (String word : wordList) {
+				phraseQuery.add(new Term(field, word));
+			}
+			return phraseQuery;
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+	
+	
+	
+	
+	
+	
+}

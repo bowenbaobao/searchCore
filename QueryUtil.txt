@@ -1,0 +1,384 @@
+package com.sekorm.core.util;
+
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.queryparser.classic.ParseException;
+import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.DisjunctionMaxQuery;
+import org.apache.lucene.search.NumericRangeQuery;
+import org.apache.lucene.search.PhraseQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.TermQuery;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+
+@Component("queryUtil")
+public class QueryUtil {
+	
+	private final Logger log = LoggerFactory.getLogger(this.getClass());
+	
+
+	
+	/**
+	 * 	单一词完全匹配，无需分词
+	 * @param field   
+	 * @param keyword
+	 * @return
+	 */
+	public 	Query  getTermQuery(String field,String keyword){
+		return	 new TermQuery(new Term(field,keyword.toLowerCase()));
+	}
+	
+	
+
+	
+	/**
+	 * @describe 全命中匹配（无序）
+	 * @param field
+	 * @param keyword
+	 * @param analyzer
+	 * @return
+	 */
+	public  Query getFullHitQuery(String field,String keyword,Analyzer analyzer){
+		try {
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList.size()==0){
+				return null;
+			}
+			BooleanQuery fullHitBQ=new BooleanQuery(true);//全部命中查询
+			for(String word:wordList){
+				fullHitBQ.add(new TermQuery(new Term(field,word)),BooleanClause.Occur.MUST);
+			}
+			return fullHitBQ;
+		} catch (Exception e) {
+			log.error("QueryUtil  getFullHitQuery error:",e);
+		}
+		return null;
+	} 
+	
+	/**
+	 * 部分命中匹配（无序）
+	 */
+	public  Query getPartHitQuery(String field,String keyword,Analyzer analyzer){
+		try {
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList.size()==0){
+				return null;
+			}
+			
+			wordList=singleFilter(wordList);
+			if(wordList==null  ||  wordList.size()==0){
+				return null;
+			}
+			
+			BooleanQuery fullHitBQ=new BooleanQuery(true);
+			for(String word:wordList){
+				fullHitBQ.add(new TermQuery(new Term(field,word)),BooleanClause.Occur.SHOULD);
+			}
+			
+			return fullHitBQ;
+		} catch (Exception e) {
+			log.error("QueryUtil  getPartHitQuery error:",e);
+		}
+		return null;
+	} 
+	
+	
+	
+	/**
+	 * 范围搜索
+	 * @param field
+	 * @param id
+	 * @return
+	 */
+
+	public Query getNumericRangeQuery(String field,Integer id){
+		Query queryid=NumericRangeQuery.newIntRange(field, id, id, true, true);
+		return queryid;
+	}
+	
+	/**
+	 * 获取分词之后的数组
+	 * @param text
+	 * @param analyzer
+	 * @return
+	 */
+	public List<String> getTokenList(String text ,Analyzer analyzer){
+		if(null== text || text.trim().isEmpty()  || null==analyzer ){
+			return new ArrayList<String>();
+		}
+		List<String> list=new ArrayList<String>();
+		TokenStream ts=null;
+		try {
+			ts=analyzer.tokenStream(null, new StringReader(text));
+			CharTermAttribute term=ts.addAttribute(CharTermAttribute.class);
+			ts.reset();
+			while(ts.incrementToken()){
+				list.add(term.toString());
+			}
+			ts.end();
+		} catch (Exception e) {
+			log.error("EcNewIndexService  getTokenList error:",e);
+		}finally{
+			if(ts!=null){
+				try {
+					ts.close();
+				} catch (IOException e) {
+					log.error("EcNewIndexService  getTokenList error:",e);
+				}
+			}
+		}
+		return list;
+	}
+	
+	/**
+	 * 判断是否是汉字
+	 * @param c
+	 * @return
+	 */
+	public boolean isChineseChar(char c){
+		return c>=19968  &&  c<=40869;
+	}
+	
+	/**
+	 * 判断是否为中文词元
+	 * @param keyword
+	 * @param analyzer
+	 * @return
+	 */
+	public boolean isSigleChinese(String keyword,Analyzer analyzer){
+		List<String> wordList=getTokenList(keyword, analyzer);
+		if(wordList==null || wordList.size()==0){
+			return false;
+		}
+		if(wordList.size()==1){
+			return true;
+		}else{
+			return false;
+		}
+		
+	}
+	
+
+	/**
+	 * @describe  短语查询(全匹配)   待测试
+	 * @author bowen_bao
+	 * @date 2015年7月24日
+	 * @param offset 默认为0
+	 * @return
+	 */
+	public PhraseQuery getPhraseQuery(String field,String keyword,Analyzer analyzer,int offset){
+		if(keyword==null || "".equals(keyword)){
+			return null;
+		}
+		try {
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList.size()==0){
+				return null;
+			}
+			
+			wordList=singleFilter(wordList);
+			
+			if(wordList==null  ||  wordList.size()==0){
+				return null;
+			}
+			
+			PhraseQuery phraseQuery=new PhraseQuery();
+			phraseQuery.setSlop(offset);
+			for(String word:wordList){
+				phraseQuery.add(new Term(field,word));
+			}
+			return phraseQuery;
+		} catch (Exception e) {
+			log.error(e.getMessage());
+		}
+		return null;
+	}
+	
+	
+	
+	public DisjunctionMaxQuery getPhraseQuerytest(String field,String keyword,Analyzer analyzer,int offset){
+		if(keyword==null || "".equals(keyword)){
+			return null;
+		}
+		try {
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList.size()==0){
+				return null;
+			}
+			DisjunctionMaxQuery maxQ=new DisjunctionMaxQuery(0.0f);
+			BooleanQuery blQ=new BooleanQuery(true); 
+			for(String word:wordList){
+				PhraseQuery phraseQuery=new PhraseQuery();
+				phraseQuery.setSlop(offset);
+				phraseQuery.add(new Term(field,word));
+				blQ.add(phraseQuery,Occur.MUST);
+			}
+			maxQ.add(blQ);
+			return maxQ;
+		} catch (Exception e) {
+			log.error(e.getMessage());
+		}
+		return null;
+	}
+
+	
+	
+	
+	
+	
+	
+	
+	/**
+	 * 是否存在查询              存在- 加权值    
+	 * @param field
+	 * @param keyword
+	 * @param analyzer
+	 * @param allWeight
+	 * @param partWeight
+	 * @return
+	 */
+	public Query isExistQuery(String field,String keyword,Analyzer analyzer,float weight){
+		BooleanQuery blQ=new BooleanQuery(true);
+		boolean isSigleChinese=isSigleChinese(keyword, analyzer);
+		if(isSigleChinese){
+			//全匹配Query
+			Query allQ=getTermQuery(field,keyword);
+			allQ.setBoost(weight);
+			blQ.add(allQ,Occur.SHOULD);
+		}else{
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList==null  ||  wordList.size()==0){
+				return null;
+			}
+			//分词部分匹配Query
+			Query partQ=getPartHitQuery(field,keyword,analyzer);
+			partQ.setBoost(weight);
+			blQ.add(partQ,Occur.SHOULD);
+		}
+		
+		return blQ;
+	}
+	
+	
+	
+	
+	/**
+	 * 	单一词完全匹配，无需分词
+	 * @param field   
+	 * @param keyword
+	 * @return
+	 */
+	public 	Query  getSingleQuerybak(String field,String keyword,Analyzer analyzer){
+		try {
+			List<String> wordList=getTokenList(keyword, analyzer);
+			if(wordList.size()==0){
+				return null;
+			}else if(wordList.size()==1){
+				BooleanQuery fullHitBQ=new BooleanQuery(true);
+				for(String word:wordList){
+					fullHitBQ.add(new TermQuery(new Term(field,word)),Occur.MUST);
+				}
+				return fullHitBQ;
+			}else{
+				return null;
+			}
+		} catch (Exception e) {
+			log.error("QueryUtil  getPartHitQuery error:",e);
+		}
+		return null;
+	}
+	
+	
+	public List<String> singleFilter(List<String> wordList){
+		if(wordList==null || wordList.size()==0){
+			return null;
+		}
+		if(wordList.size()>1){
+			List<String> list=new ArrayList<String>();
+			
+			if(wordList.size()==2){
+				if(wordList.get(0).toLowerCase().endsWith(wordList.get(1).toLowerCase())){
+					list.add(wordList.get(0));
+					return list;
+				}
+			}
+			
+			for(String s:wordList){
+				 Pattern intP =Pattern.compile("[0-9]");
+				 Pattern strP =Pattern.compile("[a-zA-Z]");
+				 if(!intP.matcher(s).matches()&& !strP.matcher(s).matches()){
+						String regEx="[\\u4e00-\\u9fa5]";
+						Pattern p=Pattern.compile(regEx);
+						Matcher m=p.matcher(s);
+						int nCount=0;
+						while(m.find()){
+							 for(int i=0;i<=m.groupCount();i++){
+								 nCount++;
+							 }
+						}
+						if(nCount!=1){
+							list.add(s);
+						}
+				 } 
+			}
+			return list;
+		}
+		
+		return wordList;
+	}
+	
+	
+	
+	//自定义破队的短语查询
+	public Query getKeywordPharseQuery(String field,String keyword,Analyzer analyzer,int offset)throws ParseException {
+		QueryParser parser=new QueryParser(field, analyzer);
+		Query q= parser.createPhraseQuery(field, keyword, offset);
+		return q;
+	}
+	
+	
+	//只能做坡度为0的短语查询
+	public Query getQuestionTitleQuery1(String field,String keyword,Analyzer analyzer)throws ParseException {
+		QueryParser parser=new QueryParser(field, analyzer);
+		Query q= parser.createPhraseQuery(field, keyword);
+		return q;
+	}
+	
+	
+	/**
+	 * 
+	 * @describe lucene 的特殊字符保护了以下的字符    +-&&||!(){}[]^''~*?:
+	 *           处理方法    QueryParser.escape(String s)  来对特殊字符进行转义
+	 *
+	 * @author bowen_bao
+	 * @date 2017年10月26日
+	 * @param
+	 * @return
+	 */
+	public Query getAttributeQuery(String field,String keyword,Analyzer analyzer)throws ParseException {
+		QueryParser parser=new QueryParser(field, analyzer);
+//		Query q= parser.parse(keyword);
+		Query q= parser.parse(QueryParser.escape(keyword));
+		return q;
+	}
+	
+	public Query getAttributeQuery(String field,String keyword)throws ParseException {
+		return	 new TermQuery(new Term(field,keyword.toLowerCase()));
+	}
+	
+}

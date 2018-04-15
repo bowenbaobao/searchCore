@@ -1,0 +1,70 @@
+package com.sekorm.core.util;
+
+import org.htmlcleaner.CleanerProperties;
+import org.htmlcleaner.HtmlCleaner;
+import org.htmlcleaner.TagNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+/**
+ * 
+ * @describe html标签的util类
+ *
+ * @author bowen_bao
+ * @date 2015年9月9日
+ */
+@Component("htmlUtil")
+public class HtmlUtil {
+	private static final Logger log = LoggerFactory.getLogger(HtmlUtil.class);
+	
+	/**
+	 * 转义特殊的html字符
+	 * 
+	 * @param str
+	 * @return 转义后的字符串
+	 */
+	public static String escapeSpecialHtmlChar(String str) {
+		if (str == null || str.length() == 0) {
+			return str;
+		}
+
+		str = str.replaceAll("&", "&amp;");
+		str = str.replaceAll("<", "&lt;");
+		str = str.replaceAll(">", "&gt;");
+		str = str.replaceAll("'", "&apos;");
+		str = str.replaceAll("\"", "&quot;");
+		str = str.replaceAll("\\$", "\\$\\$");
+
+		return str;
+	}
+	
+	/**
+	 * 抽取html纯文本数据
+	 * 
+	 * @param html
+	 * @return 失败：空串("")
+	 */
+	public   String extractTextData(String html) {
+		try {
+			CleanerProperties props = new CleanerProperties();
+
+			props.setAllowHtmlInsideAttributes(true);
+			props.setOmitComments(true);
+			props.setOmitDoctypeDeclaration(true);
+			props.setOmitXmlDeclaration(true);
+			props.setPruneTags("script,noscript,link,base,style,meta"); // 设置要删除的标签
+			props.setAdvancedXmlEscape(true);
+			
+			HtmlCleaner htmlCleaner = new HtmlCleaner(props); // 创建一个htmlcleaner实例
+			
+			TagNode rootNode = htmlCleaner.clean(html);
+			
+			return rootNode.getText().toString().replace("&nbsp;", " ").trim(); // 返回纯文本数据;
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		}
+		
+		return "";
+	}
+}

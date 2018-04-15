@@ -1,0 +1,44 @@
+package com.sekorm.core.util;
+
+import java.io.Reader;
+import java.util.regex.Pattern;
+
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.core.LowerCaseFilter;
+import org.apache.lucene.analysis.pattern.PatternTokenizer;
+
+/**
+ * 自定义分词器
+ * @author bowen_bao
+ *
+ */
+public class PatternAnalyzer extends  Analyzer{
+	
+	
+	private Pattern pattern;
+	private boolean toLowerCase;
+	
+	public PatternAnalyzer(String regex){
+		this(regex,true);    //全部转小写
+//		this(regex,false);   //不处理
+	}
+	public PatternAnalyzer(String regex,boolean toLowerCase){
+		this.pattern=Pattern.compile(regex);
+		this.toLowerCase=toLowerCase;
+	}
+	
+	public PatternAnalyzer(Pattern pattern,boolean toLowerCase){
+		this.pattern=pattern;
+		this.toLowerCase=toLowerCase;
+	}
+	
+	@SuppressWarnings("resource")
+	@Override
+	protected TokenStreamComponents createComponents(String arg0, Reader arg1) {
+		PatternTokenizer tokenizer=new PatternTokenizer(arg1,pattern,-1);
+		TokenStream result =toLowerCase?new LowerCaseFilter(tokenizer):tokenizer;
+		return new TokenStreamComponents(tokenizer,result);
+	}
+	
+}
